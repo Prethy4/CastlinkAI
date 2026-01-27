@@ -1,0 +1,5 @@
+.venv/
+.env
+local_talent.db
+__pycache__/ 
+*pyc
