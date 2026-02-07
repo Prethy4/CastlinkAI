@@ -1,30 +1,26 @@
-from typing import List, Optional, Dict, Any, Annotated
+from __future__ import annotations
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
 
 class OptionalDetails(BaseModel):
     location: Optional[str] = None
-    shoot_date: Optional[List[str]] = None
+    shoot_dates: Optional[List[str]] = None
     budget_range: Optional[int] = None
     job_type: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    user_id: str
-    session_id: Optional[str] = None
-    message: str
-    optional_details: Optional[OptionalDetails] = None
 
 class TalentResponse(BaseModel):
     id: str
     name: Optional[str] = None
+    availability: Optional[List[str]] = None
     photos: Optional[str] = None
     height: Optional[str] = None
     bust: Optional[str] = None
     waist: Optional[str] = None
     hips: Optional[str] = None
     dress_size: Optional[str] = None
+    shoe_size: Optional[str] = None
     hair: Optional[str] = None
+    hair_type: Optional[str] = None
     eyes: Optional[str] = None
     skin: Optional[str] = None
     agent_name: Optional[str] = None
@@ -44,7 +40,6 @@ class ChatResponse(BaseModel):
     session_id: str
     response_text: str
     suggested_talents: List[TalentResponse] = []
-    # missing_info_request: Optional[str] = None
 
 class SaveTalentRequest(BaseModel):
     user_id: str
@@ -64,6 +59,16 @@ class ChatMessageResponse(BaseModel):
     class Config:
         orm_mode = True
 
+class DraftResponse(BaseModel):
+    session_id: str
+    user_id: str
+    phase: str
+    saved_filters: Dict[str, Any] = {}
+    last_updated: str
+
+    class Config:
+        orm_mode = True
+
 class ChatSessionResponse(BaseModel):
     id: str
     user_id: str
@@ -72,8 +77,3 @@ class ChatSessionResponse(BaseModel):
 
     class Config:
         orm_mode = True
-
-class AgentState(BaseModel):
-    messages: Annotated[List[BaseMessage], add_messages]
-    filters: Dict[str, Any] = {}
-    found_talents: List[Dict] = []
