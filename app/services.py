@@ -3,8 +3,8 @@ from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, BaseM
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from typing import List, Dict, Any, Annotated
-from pydantic import BaseModel
+from typing import List, Dict, Any, Annotated, Optional
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, cast, String
 from database import SessionLocal, Talent
 from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL, SYSTEM_PROMPT
@@ -14,6 +14,54 @@ class AgentState(BaseModel):
     filters: Dict[str, Any] = {}
     found_talents: List[Dict] = []
 
+class ExtractedFilters(BaseModel):
+    location: Optional[str] = Field(None, description="Location")
+    continent: Optional[str] = Field(None, description="Continent")
+    country: Optional[str] = Field(None, description="Country")
+    job_type: Optional[str] = Field(None, description="Job Type")
+    gender: Optional[str] = Field(None, description="Gender")
+    hair_color: Optional[str] = Field(None, description="Hair Color")
+    eye_color: Optional[str] = Field(None, description="Eye Color")
+    skin_color: Optional[str] = Field(None, description="Skin Color")
+    budget: Optional[int] = Field(None, description="Budget")
+    shoot_dates: Optional[List[str]] = Field(None, description="Shoot Dates")
+    category: Optional[str] = Field(None, description="Category")
+    hair_type: Optional[str] = Field(None, description="Hair Type")
+    height: Optional[str] = Field(None, description="Height")
+    bust: Optional[str] = Field(None, description="Bust")
+    waist: Optional[str] = Field(None, description="Waist")
+    hips: Optional[str] = Field(None, description="Hips")
+    dress_size: Optional[str] = Field(None, description="Dress Size")
+    shoe_size: Optional[str] = Field(None, description="Shoe Size")
+
+def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Extracts casting filters from user input using a lightweight LLM call."""
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY)
+    structured_llm = llm.with_structured_output(ExtractedFilters)
+    
+    prompt = f"""
+    You are a Casting Assistant. Extract casting requirements from the user's message.
+    Current known info: {current_filters}
+    User message: "{user_input}"
+    
+    Return ONLY the fields that are explicitly mentioned or updated in the user message.
+    If the user provides a role type like 'supporting', 'lead', or 'extra', map it to 'category'.
+    """
+    try:
+        result = structured_llm.invoke(prompt)
+        return {k: v for k, v in result.dict().items() if v is not None}
+    except Exception as e:
+        return e
+
+def generate_ask_response(missing_fields: List[str]) -> str:
+    """Generates a polite question to ask for missing mandatory fields."""
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0.6, api_key=OPENAI_API_KEY)
+    prompt = f"""
+    You are a Casting Assistant. You need to collect the following missing mandatory fields: {', '.join(missing_fields)}.
+    Politely ask the user for ONE or TWO of these fields. Keep it short and professional.
+    """
+    return llm.invoke(prompt).content
+
 @tool
 def generate_casting(location: str = None, continent: str = None, country: str = None, job_type: str = None,
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
@@ -21,75 +69,76 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                      height: str = None, bust: str = None, waist: str = None, hips: str = None, dress_size: str = None,
                      shoe_size: str = None):
     """
-    Search for talent. Only call when Gender, Category, Location, Job Type, and Shoot Dates are known.
+    Search for talent. Returns ranked recommendations based on matched criteria.
     """
     db = SessionLocal()
-    query_obj = db.query(Talent)
+    talents = db.query(Talent).all()
+    
+    scored_talents = []
+    
+    for t in talents:
+        score = 0
+        
+        # Helper for case-insensitive partial match
+        def matches(value, target):
+            if not value or not target:
+                return False
+            return str(value).lower() in str(target).lower()
 
-    # Mandatory & Semi-Mandatory Filters (approximated match)
-    if location:
-        query_obj = query_obj.filter(
-            or_(
-                Talent.location.ilike(f"%{location}%"),
-                Talent.country.ilike(f"%{location}%"),
-                Talent.continent.ilike(f"%{location}%")
-            )
-        )
-    if continent:
-        query_obj = query_obj.filter(Talent.continent.ilike(f"%{continent}%"))
-    if country:
-        query_obj = query_obj.filter(Talent.country.ilike(f"%{country}%"))
-    if gender:
-        query_obj = query_obj.filter(Talent.gender.ilike(f"%{gender}%"))
-    if category:
-        query_obj = query_obj.filter(Talent.category.ilike(f"%{category}%"))
-    if hair_color:
-        query_obj = query_obj.filter(Talent.hair.ilike(f"%{hair_color}%"))
-    if hair_type:
-        query_obj = query_obj.filter(Talent.hair_type.ilike(f"%{hair_type}%"))
-    if eye_color:
-        query_obj = query_obj.filter(Talent.eyes.ilike(f"%{eye_color}%"))
-    if skin_color:
-        query_obj = query_obj.filter(Talent.skin_color.ilike(f"%{skin_color}%"))
-    if budget is not None:
-        query_obj = query_obj.filter(Talent.budget_tier <= budget)
-    if job_type:
-        # Optimization: Filter job_type in SQL instead of Python to reduce fetch size
-        query_obj = query_obj.filter(cast(Talent.job_types, String).ilike(f"%{job_type}%"))
+        if location:
+            if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
+                score += 1
+        if continent and matches(continent, t.continent): score += 1
+        if country and matches(country, t.country): score += 1
+        if gender and matches(gender, t.gender): score += 1
+        if category and matches(category, t.category): score += 1
+        if hair_color and matches(hair_color, t.hair): score += 1
+        if hair_type and matches(hair_type, t.hair_type): score += 1
+        if eye_color and matches(eye_color, t.eyes): score += 1
+        if skin_color and matches(skin_color, t.skin_color): score += 1
+        if height and t.height == height: score += 1
+        if bust and t.bust == bust: score += 1
+        if waist and t.waist == waist: score += 1
+        if hips and t.hips == hips: score += 1
+        if dress_size and t.dress_size == dress_size: score += 1
+        if shoe_size and t.shoe_size == shoe_size: score += 1
+        if job_type:
+            j_types = t.job_types
+            if isinstance(j_types, list):
+                if any(matches(job_type, jt) for jt in j_types): score += 1
+            elif matches(job_type, j_types): score += 1
+                
+        if budget is not None and t.budget_tier is not None:
+            if t.budget_tier <= budget: score += 1
+        if shoot_dates and t.availability:
+            avail_str = str(t.availability)
+            if any(d in avail_str for d in shoot_dates if d):
+                score += 1
+        
+        if score > 0:
+            scored_talents.append((score, t))
 
-    # Non-Mandatory Filters (exact match)
-    if height:
-        query_obj = query_obj.filter(Talent.height == height)
-    if bust:
-        query_obj = query_obj.filter(Talent.bust == bust)
-    if waist:
-        query_obj = query_obj.filter(Talent.waist == waist)
-    if hips:
-        query_obj = query_obj.filter(Talent.hips == hips)
-    if dress_size:
-        query_obj = query_obj.filter(Talent.dress_size == dress_size)
-    if shoe_size:
-        query_obj = query_obj.filter(Talent.shoe_size == shoe_size)
-
-    # Optimization: Limit fetch to 50 to prevent memory overflow with 1000 users
-    talents = query_obj.limit(50).all()
+    scored_talents.sort(key=lambda x: x[0], reverse=True)
+    top_results = [item[1] for item in scored_talents[:10]]
     
     result_list = []
-    for t in talents:
-        if shoot_dates and t.availability:
-            # Date logic is complex, keeping in Python but operating on a smaller dataset now
-            talent_availability = t.availability if isinstance(t.availability, list) else [str(t.availability)] 
-            valid_shoot_dates = [date for date in shoot_dates if date]
-            if valid_shoot_dates and not any(date in talent_availability for date in valid_shoot_dates):
-                continue
-            
-        photos = t.photos[0] if t.photos and isinstance(t.photos, list) and len(t.photos) > 0 else None
+    for t in top_results:
+        photos = t.photos
+        if isinstance(photos, list):
+            photos = photos[0] if photos else None
+        
+        availability_list = []
+        if t.availability:
+            if isinstance(t.availability, str):
+                availability_list = [d.strip() for d in t.availability.split(",") if d.strip()]
+            elif isinstance(t.availability, list):
+                availability_list = t.availability
 
         result_list.append({
             "id": t.id,
-            "name": t.name,
-            "availability": t.availability,
             "photos": photos,
+            "availability": availability_list,
+            "name": t.name,
             "height": t.height,
             "bust": t.bust,
             "waist": t.waist,
@@ -99,11 +148,10 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             "hair": t.hair,
             "hair_type": t.hair_type,
             "eyes": t.eyes,
+            "skin": t.skin_color,
             "agent_name": t.agent_name,
             "budget_tier": t.budget_tier,
         })
-        if len(result_list) >= 10:
-            break
     db.close()
     return result_list
 
@@ -123,11 +171,8 @@ def custom_tool_node(state: AgentState):
     outputs = []
     for tool_call in state.messages[-1].tool_calls:
         if tool_call["name"] == "generate_casting":
-            # Execute the tool
             result = generate_casting.invoke(tool_call["args"])
             
-            # Create a concise summary for the LLM to save tokens
-            # The full data is passed in 'artifact' which the LLM does not see, but the UI can read
             outputs.append(ToolMessage(
                 content=f"Search completed. Found {len(result)} talents. The full list has been sent to the user interface.",
                 name=tool_call["name"],

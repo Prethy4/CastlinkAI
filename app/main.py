@@ -1,17 +1,17 @@
+import os
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 from datetime import date, datetime
 from fastapi import FastAPI, HTTPException, Depends, Form
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
 from database import init_db, get_db, Talent, SavedTalent, ChatSession, ChatMessage, Booking, Draft
 from schemas import ChatResponse, SaveTalentRequest, TalentResponse, ChatSessionResponse, BookTalentRequest, DraftResponse
-from services import app_graph
+from services import app_graph, extract_information, generate_ask_response
 
 from typing import List, Optional
 import json
-import os
-# from dotenv import load_dotenv
-
-# load_dotenv(override=True)
 
 # Initialize database
 init_db()
@@ -119,7 +119,7 @@ async def health_check():
 
 SERVER_START_TIME = str(datetime.now())
 
-@app.post("/api/send", response_model=ChatResponse)
+@app.post("/api/chat", response_model=ChatResponse)
 async def send_message(
     message: str = Form(..., description="Ask Anything"),
     user_id: str = Form(..., description="User ID"),
@@ -165,18 +165,36 @@ async def send_message(
         cleaned_dates = []
         for d in shoot_dates:
             if "," in d:
-                cleaned_dates.extend([date.strip() for date in d.split(",")])
+                cleaned_dates.extend([dt.strip() for dt in d.split(",") if dt.strip()])
             else:
-                cleaned_dates.append(d)
-        filters['shoot_dates'] = cleaned_dates
+                if d.strip():
+                    cleaned_dates.append(d)
+        if cleaned_dates:
+            filters['shoot_dates'] = cleaned_dates
     if budget_range: filters['budget_range'] = budget_range
     if job_type: filters['job_type'] = job_type
 
-    inputs = {"messages": msgs, "filters": filters}
+    # Extract new info from user message without graph
+    extracted_updates = extract_information(message, filters)
+    filters.update(extracted_updates)
+
+    # Check for mandatory fields
+    mandatory_keys = ["gender", "category", "location", "job_type", "shoot_dates"]
+    missing_keys = [k for k in mandatory_keys if not filters.get(k)]
     
-    final_state = app_graph.invoke(inputs, config={"recursion_limit": 5})
+    final_state = {}
+    response_content = ""
+
+    if missing_keys:
+        response_content = generate_ask_response(missing_keys)
+        final_state = {"filters": filters, "messages": [AIMessage(content=response_content)]}
+    else:
+        inputs = {"messages": msgs, "filters": filters}
+        final_state = app_graph.invoke(inputs, config={"recursion_limit": 5})
+        last_msg = final_state['messages'][-1]
+        response_content = last_msg.content
     
-    if save_as_draft:
+    if True:
         current_filters = final_state.get('filters', {})
         
         mandatory_keys = ["gender", "category", "location", "job_type", "shoot_dates"]
@@ -192,9 +210,6 @@ async def send_message(
         draft.saved_filters = current_filters
         draft.last_updated = str(datetime.now())
         db.commit()
-
-    last_msg = final_state['messages'][-1]
-    response_content = last_msg.content
 
     ai_msg = ChatMessage(session_id=chat_session.id, sender="ai", content=response_content)
     db.add(ai_msg)
@@ -267,7 +282,7 @@ async def delete_session(
     db.commit()
     return {"status": "success", "message": "Session deleted"}
 
-###########---------save a talent-------############
+###########---------save a talent-------############ 
 
 @app.post("/save-talent")
 async def save_talents(
