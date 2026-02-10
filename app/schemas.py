@@ -27,12 +27,12 @@ class TalentResponse(BaseModel):
     budget_tier: Optional[int] = None
     actions: Dict[str, str] = Field(
         default_factory=lambda: {
-            "save": "POST /save-talent",
-            "book": "POST /book-talent",
-            "calendar": "GET /talent/{id}/calendar",
-            "selftape": "POST /talent/{id}/selftape",
-            "request_virtual_casting": "GET /talent/{id}/request_virtual_casting",
-            "request_polas": "POST /talent/{id}/polas"
+            # "save": "POST /save-talent",
+            # "book": "POST /book-talent",
+            # "calendar": "GET /talent/{id}/calendar",
+            # "selftape": "POST /talent/{id}/selftape",
+            # "request_virtual_casting": "GET /talent/{id}/request_virtual_casting",
+            # "request_polas": "POST /talent/{id}/polas"
         }
     )
 
@@ -41,15 +41,15 @@ class ChatResponse(BaseModel):
     response_text: str
     suggested_talents: List[TalentResponse] = []
 
-class SaveTalentRequest(BaseModel):
-    user_id: str
-    session_id: str
-    talent_id: str
+# class SaveTalentRequest(BaseModel):
+#     user_id: str
+#     session_id: str
+#     talent_id: str
 
-class BookTalentRequest(BaseModel):
-    user_id: str
-    session_id: Optional[str] = None
-    talent_id: str
+# class BookTalentRequest(BaseModel):
+#     user_id: str
+#     session_id: Optional[str] = None
+#     talent_id: str
 
 class ChatMessageResponse(BaseModel):
     sender: str

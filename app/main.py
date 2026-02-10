@@ -6,8 +6,8 @@ from datetime import date, datetime
 from fastapi import FastAPI, HTTPException, Depends, Form
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
-from database import init_db, get_db, Talent, SavedTalent, ChatSession, ChatMessage, Booking, Draft
-from schemas import ChatResponse, SaveTalentRequest, TalentResponse, ChatSessionResponse, BookTalentRequest, DraftResponse
+from database import init_db, get_db, Talent, ChatSession, ChatMessage, Draft # SavedTalent, Booking
+from schemas import ChatResponse, TalentResponse, ChatSessionResponse, DraftResponse # SaveTalentRequest, BookTalentRequest
 from services import app_graph, extract_information, generate_ask_response
 
 from typing import List, Optional
@@ -244,6 +244,8 @@ async def get_sessions(
     db: Session = Depends(get_db)
     ):
     sessions = db.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+    if not sessions:
+        raise HTTPException(status_code=404, detail="User not found")
     return sessions
 
 ############----------get chat session by id--------############ recheck
@@ -255,7 +257,7 @@ async def get_session_details(
     ):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Chat not found")
     return session
 
 @app.get("/api/chat/drafts/{session_id}", response_model=DraftResponse)
@@ -277,151 +279,151 @@ async def delete_session(
     ):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Chat not found")
     db.delete(session)
     db.commit()
     return {"status": "success", "message": "Session deleted"}
 
-###########---------save a talent-------############ 
+# ###########---------save a talent-------############ 
 
-@app.post("/save-talent")
-async def save_talents(
-    request: SaveTalentRequest, 
-    db: Session = Depends(get_db)
-    ):
-    """ 
-    save a talent for further view
-    """
-    # Check if talent exists
-    talent = db.query(Talent).filter(Talent.id == request.talent_id).first()
-    if not talent:
-        raise HTTPException(status_code=404, detail="Talent not found")
+# # @app.post("/save-talent")
+# # async def save_talents(
+# #     request: SaveTalentRequest, 
+# #     db: Session = Depends(get_db)
+# #     ):
+# #     """ 
+# #     save a talent for further view
+# #     """
+# #     # Check if talent exists
+# #     talent = db.query(Talent).filter(Talent.id == request.talent_id).first()
+# #     if not talent:
+# #         raise HTTPException(status_code=404, detail="Talent not found")
+# #     
+# #     saved = SavedTalent(
+# #         user_session_id=request.session_id,
+# #         user_id=request.user_id,
+# #         talent_id=request.talent_id,
+# #         saved_at=str(date.today())
+# #     )
+# #     db.add(saved)
+# #     db.commit()
+# #     return {
+# #             "status": "success", 
+# #             "message": f"Talent {talent.name} saved."
+# #             }
+
+# #########--------View calendar of a member that shows which dates they are available---------#########
+
+# # @app.get("/talent/{talent_id}/availability")
+# # async def get_availability(
+# #     talent_id: str, 
+# #     db: Session = Depends(get_db)
+# #     ):
+# #     """
+# #     View availability dates of a member
+# #     """
+# #     talent = db.query(Talent).filter(Talent.id == talent_id).first()
+# #     if not talent: raise HTTPException(404)
+# #     return {
+# #         "talent_id": talent.id,
+# #         "name": talent.name,
+# #         "available on": talent.availability
+# #     }
+
+# # # @app.get("/talent/{talent_id}/calendar")
+# # # async def get_calendar(talent_id: str, db: Session = Depends(get_db)):
+# # #     """
+# # #     View calendar of a member that shows which dates they are available.
+# # #     """
+# # #     talent = db.query(Talent).filter(Talent.id == talent_id).first()
+# # #     if not talent:
+# # #         raise HTTPException(status_code=404, detail="Talent not found")
+# # #     
+# # #     return {
+# # #         "talent_id": talent.id,
+# # #         "name": talent.name,
+# # #         "availability": talent.availability
+# # #     }
+
+# #########----------upload selftape endpoint---------############
+
+# # @app.post("/talent/{talent_id}/selftape")
+# # async def upload_selftape(
+# #     talent_id: str
+# #     ):
+# #     """
+# #     request for an selftape
+# #     """
+# #     return {
+# #             "message": "Self-tape upload endpoint (add file handling here)"
+# #             }
+
+# # @app.get("/talent/{talent_id}/request_virtual_casting")
+# # async def get_request_virtual_casting(
+# #     talent_id: str, 
+# #     db: Session = Depends(get_db)
+# #     ):
+# #     """
+# #     request a virtual meet for casting
+# #     """
+# #     talent = db.query(Talent).filter(Talent.id == talent_id).first()
+# #     if not talent: raise HTTPException(404)
+# #     return {
+# #             "virtual meet endpoint": talent.virtual_meet
+# #             }
+
+# # @app.post("/talent/{talent_id}/polas")
+# # async def request_polas(
+# #     talent_id: str
+# #     ):
+# #     """
+# #     upload polas raw face images
+# #     """
+# #     return {
+# #             "message": "polas request endpoint"
+# #             }
     
-    saved = SavedTalent(
-        user_session_id=request.session_id,
-        user_id=request.user_id,
-        talent_id=request.talent_id,
-        saved_at=str(date.today())
-    )
-    db.add(saved)
-    db.commit()
-    return {
-            "status": "success", 
-            "message": f"Talent {talent.name} saved."
-            }
+# # @app.post("/book-talent")
+# # async def book_talent(
+# #     request: BookTalentRequest, 
+# #     db: Session = Depends(get_db)
+# #     ):
+# #     """
+# #     Book a talent. Automatically saves the talent if not already saved.
+# #     """
+# #     # To check if talent exists
+# #     talent = db.query(Talent).filter(Talent.id == request.talent_id).first()
+# #     if not talent:
+# #         raise HTTPException(status_code=404, detail="Talent not found")
 
-#########--------View calendar of a member that shows which dates they are available---------#########
+# #     # To check if already saved
+# #     saved = db.query(SavedTalent).filter(
+# #         SavedTalent.user_id == request.user_id,
+# #         SavedTalent.talent_id == request.talent_id
+# #     ).first()
 
-@app.get("/talent/{talent_id}/availability")
-async def get_availability(
-    talent_id: str, 
-    db: Session = Depends(get_db)
-    ):
-    """
-    View availability dates of a member
-    """
-    talent = db.query(Talent).filter(Talent.id == talent_id).first()
-    if not talent: raise HTTPException(404)
-    return {
-        "talent_id": talent.id,
-        "name": talent.name,
-        "available on": talent.availability
-    }
+# #     #if not saved than saves
+# #     if not saved:
+# #         saved = SavedTalent(
+# #             user_session_id=request.session_id or "direct_booking",
+# #             user_id=request.user_id,
+# #             talent_id=request.talent_id,
+# #             saved_at=str(date.today())
+# #         )
+# #         db.add(saved)
 
-# @app.get("/talent/{talent_id}/calendar")
-# async def get_calendar(talent_id: str, db: Session = Depends(get_db)):
-#     """
-#     View calendar of a member that shows which dates they are available.
-#     """
-#     talent = db.query(Talent).filter(Talent.id == talent_id).first()
-#     if not talent:
-#         raise HTTPException(status_code=404, detail="Talent not found")
+# #     booking = Booking(     # Create Booking
+# #         user_id=request.user_id,
+# #         talent_id=request.talent_id,
+# #         booking_date=str(datetime.now())
+# #     )
+# #     db.add(booking) #add booking
+# #     db.commit()
     
-#     return {
-#         "talent_id": talent.id,
-#         "name": talent.name,
-#         "availability": talent.availability
-#     }
-
-#########----------upload selftape endpoint---------############
-
-@app.post("/talent/{talent_id}/selftape")
-async def upload_selftape(
-    talent_id: str
-    ):
-    """
-    request for an selftape
-    """
-    return {
-            "message": "Self-tape upload endpoint (add file handling here)"
-            }
-
-@app.get("/talent/{talent_id}/request_virtual_casting")
-async def get_request_virtual_casting(
-    talent_id: str, 
-    db: Session = Depends(get_db)
-    ):
-    """
-    request a virtual meet for casting
-    """
-    talent = db.query(Talent).filter(Talent.id == talent_id).first()
-    if not talent: raise HTTPException(404)
-    return {
-            "virtual meet endpoint": talent.virtual_meet
-            }
-
-@app.post("/talent/{talent_id}/polas")
-async def request_polas(
-    talent_id: str
-    ):
-    """
-    upload polas raw face images
-    """
-    return {
-            "message": "polas request endpoint"
-            }
-    
-@app.post("/book-talent")
-async def book_talent(
-    request: BookTalentRequest, 
-    db: Session = Depends(get_db)
-    ):
-    """
-    Book a talent. Automatically saves the talent if not already saved.
-    """
-    # To check if talent exists
-    talent = db.query(Talent).filter(Talent.id == request.talent_id).first()
-    if not talent:
-        raise HTTPException(status_code=404, detail="Talent not found")
-
-    # To check if already saved
-    saved = db.query(SavedTalent).filter(
-        SavedTalent.user_id == request.user_id,
-        SavedTalent.talent_id == request.talent_id
-    ).first()
-
-    #if not saved than saves
-    if not saved:
-        saved = SavedTalent(
-            user_session_id=request.session_id or "direct_booking",
-            user_id=request.user_id,
-            talent_id=request.talent_id,
-            saved_at=str(date.today())
-        )
-        db.add(saved)
-
-    booking = Booking(     # Create Booking
-        user_id=request.user_id,
-        talent_id=request.talent_id,
-        booking_date=str(datetime.now())
-    )
-    db.add(booking) #add booking
-    db.commit()
-    
-    return {
-        "status": "success",
-        "message": f"Talent {talent.name} booked successfully."
-    }
+# #     return {
+# #         "status": "success",
+# #         "message": f"Talent {talent.name} booked successfully."
+# #     }
 
 if __name__ == "__main__":
     import uvicorn

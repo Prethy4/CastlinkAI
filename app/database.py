@@ -14,7 +14,7 @@ class Talent(Base):
     gender = Column(String)
     category = Column(String)
     agent_name = Column(String)
-    virtual_meet = Column(String)
+    # virtual_meet = Column(String)
     height = Column(String)
     bust = Column(String)
     waist = Column(String)
@@ -35,14 +35,14 @@ class Talent(Base):
     shoot_dates= Column(Date)
     budget_tier = Column(BigInteger)
 
-class SavedTalent(Base):
-    __tablename__ = "saved_talents"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_session_id = Column(String, index=True)
-    talent_id = Column(String, ForeignKey("talents.id"))
-    saved_at = Column(String)
-    user_id = Column(String)
+# class SavedTalent(Base):
+#     __tablename__ = "saved_talents"
+#     
+#     id = Column(Integer, primary_key=True, index=True)
+#     user_session_id = Column(String, index=True)
+#     talent_id = Column(String, ForeignKey("talents.id"))
+#     saved_at = Column(String)
+#     user_id = Column(String)
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -64,13 +64,13 @@ class ChatMessage(Base):
     
     session = relationship("ChatSession", back_populates="messages")
 
-class Booking(Base):
-    __tablename__ = "bookings"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String)
-    talent_id = Column(String, ForeignKey("talents.id"))
-    booking_date = Column(String)
+# class Booking(Base):
+#     __tablename__ = "bookings"
+#     
+#     id = Column(Integer, primary_key=True, index=True)
+#     user_id = Column(String)
+#     talent_id = Column(String, ForeignKey("talents.id"))
+#     booking_date = Column(String)
 
 class Draft(Base):
     __tablename__ = "drafts"
@@ -86,7 +86,7 @@ class Draft(Base):
 if "sqlite" in DATABASE_URL:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=1800)
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
