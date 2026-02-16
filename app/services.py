@@ -51,7 +51,7 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
         result = structured_llm.invoke(prompt)
         return {k: v for k, v in result.dict().items() if v is not None}
     except Exception as e:
-        return e
+        return {}
 
 def generate_ask_response(missing_fields: List[str]) -> str:
     """Generates a polite question to ask for missing mandatory fields."""

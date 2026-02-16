@@ -36,6 +36,29 @@ class TalentResponse(BaseModel):
         }
     )
 
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    location: Optional[str] = None
+    shoot_dates: Optional[List[str]] = None
+    budget_range: Optional[int] = None
+    job_type: Optional[str] = None
+    save_as_draft: bool = False
+
+class UserRequest(BaseModel):
+    user_id: str
+
+class SessionRequest(BaseModel):
+    user_id: str
+    session_id: str
+    
+class DraftRequest(BaseModel):
+    id: int
+    user_id: str
+    
+class DraftUserRequest(BaseModel):
+    user_id: str
+
 class ChatResponse(BaseModel):
     session_id: str
     response_text: str
@@ -60,8 +83,9 @@ class ChatMessageResponse(BaseModel):
         orm_mode = True
 
 class DraftResponse(BaseModel):
-    session_id: str
+    id: int
     user_id: str
+    session_id: str
     phase: str
     saved_filters: Dict[str, Any] = {}
     last_updated: str
