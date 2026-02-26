@@ -3,12 +3,42 @@ from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, BaseM
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from typing import List, Dict, Any, Annotated, Optional
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, cast, String
+from typing import List, Dict, Any, Annotated, Optional
+from fastapi import Request, HTTPException, status
+from sqlalchemy import or_
 from database import SessionLocal, Talent
 from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL, SYSTEM_PROMPT
+from datetime import datetime, date
+import json
+import time
+import re
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return str(obj)
+        return json.JSONEncoder.default(self, obj)
+
+class RateLimiter:
+    def __init__(self, limit: int, window: int, error_msg: str):
+        self.limit = limit
+        self.window = window
+        self.error_msg = error_msg
+        self.clients = defaultdict(list)
+
+    async def __call__(self, request: Request):
+        client_ip = request.client.host
+        now = time.time()
+        self.clients[client_ip] = [t for t in self.clients[client_ip] if now - t < self.window]
+        if len(self.clients[client_ip]) >= self.limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=self.error_msg)
+        self.clients[client_ip].append(now)
+        
 class AgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages]
     filters: Dict[str, Any] = {}
@@ -18,21 +48,20 @@ class ExtractedFilters(BaseModel):
     location: Optional[str] = Field(None, description="Location")
     continent: Optional[str] = Field(None, description="Continent")
     country: Optional[str] = Field(None, description="Country")
-    job_type: Optional[str] = Field(None, description="Job Type")
     gender: Optional[str] = Field(None, description="Gender")
     hair_color: Optional[str] = Field(None, description="Hair Color")
     eye_color: Optional[str] = Field(None, description="Eye Color")
     skin_color: Optional[str] = Field(None, description="Skin Color")
-    budget: Optional[int] = Field(None, description="Budget")
-    shoot_dates: Optional[List[str]] = Field(None, description="Shoot Dates")
-    category: Optional[str] = Field(None, description="Category")
+    shoot_date: Optional[List[str]] = Field(None, description="Shoot Dates")
+    role: Optional[str] = Field(None, description="Role")
     hair_type: Optional[str] = Field(None, description="Hair Type")
     height: Optional[str] = Field(None, description="Height")
     bust: Optional[str] = Field(None, description="Bust")
     waist: Optional[str] = Field(None, description="Waist")
     hips: Optional[str] = Field(None, description="Hips")
-    dress_size: Optional[str] = Field(None, description="Dress Size")
     shoe_size: Optional[str] = Field(None, description="Shoe Size")
+    budget: Optional[str] = Field(None, description="Budget")
+    job_type: Optional[str] = Field(None, description="Job Type")
 
 def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
     """Extracts casting filters from user input using a lightweight LLM call."""
@@ -45,7 +74,7 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     User message: "{user_input}"
     
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
-    If the user provides a role type like 'supporting', 'lead', or 'extra', map it to 'category'.
+    If the user provides a role type like 'supporting', 'lead', or 'extra', map it to 'role'.
     """
     try:
         result = structured_llm.invoke(prompt)
@@ -63,97 +92,108 @@ def generate_ask_response(missing_fields: List[str]) -> str:
     return llm.invoke(prompt).content
 
 @tool
-def generate_casting(location: str = None, continent: str = None, country: str = None, job_type: str = None,
+def generate_casting(location: str = None, continent: str = None, country: str = None,
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
-                     budget: int = None, shoot_dates: List[str] = None, category: str = None, hair_type: str = None,
-                     height: str = None, bust: str = None, waist: str = None, hips: str = None, dress_size: str = None,
+                     shoot_date: List[str] = None, role: str = None, hair_type: str = None,
+                     height: str = None, bust: str = None, waist: str = None, hips: str = None, budget: str = None, job_type: str = None,
                      shoe_size: str = None):
     """
     Search for talent. Returns ranked recommendations based on matched criteria.
     """
     db = SessionLocal()
-    talents = db.query(Talent).all()
-    
-    scored_talents = []
-    
-    for t in talents:
-        score = 0
+    try:
+        talents = db.query(Talent).outerjoin(Talent.agent).filter(Talent.is_available == True).all()
         
-        # Helper for case-insensitive partial match
-        def matches(value, target):
-            if not value or not target:
-                return False
-            return str(value).lower() in str(target).lower()
-
-        if location:
-            if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
-                score += 1
-        if continent and matches(continent, t.continent): score += 1
-        if country and matches(country, t.country): score += 1
-        if gender and matches(gender, t.gender): score += 1
-        if category and matches(category, t.category): score += 1
-        if hair_color and matches(hair_color, t.hair): score += 1
-        if hair_type and matches(hair_type, t.hair_type): score += 1
-        if eye_color and matches(eye_color, t.eyes): score += 1
-        if skin_color and matches(skin_color, t.skin_color): score += 1
-        if height and t.height == height: score += 1
-        if bust and t.bust == bust: score += 1
-        if waist and t.waist == waist: score += 1
-        if hips and t.hips == hips: score += 1
-        if dress_size and t.dress_size == dress_size: score += 1
-        if shoe_size and t.shoe_size == shoe_size: score += 1
-        if job_type:
-            j_types = t.job_types
-            if isinstance(j_types, list):
-                if any(matches(job_type, jt) for jt in j_types): score += 1
-            elif matches(job_type, j_types): score += 1
-                
-        if budget is not None and t.budget_tier is not None:
-            if t.budget_tier <= budget: score += 1
-        if shoot_dates and t.availability:
-            avail_str = str(t.availability)
-            if any(d in avail_str for d in shoot_dates if d):
-                score += 1
+        scored_talents = []
         
-        if score > 0:
-            scored_talents.append((score, t))
+        for t in talents:
+            score = 0
+            
+            def matches(value, target):
+                if not value or not target:
+                    return False
+                return str(value).lower() in str(target).lower()
 
-    scored_talents.sort(key=lambda x: x[0], reverse=True)
-    top_results = [item[1] for item in scored_talents[:10]]
-    
-    result_list = []
-    for t in top_results:
-        photos = t.photos
-        if isinstance(photos, list):
-            photos = photos[0] if photos else None
+            if location:
+                if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
+                    score += 1
+            if continent and matches(continent, t.continent): score += 1
+            if country and matches(country, t.country): score += 1
+            
+            # Strict gender match
+            if gender:
+                if t.gender and gender.lower() == t.gender.lower():
+                    score += 1
+            
+            if role and matches(role, t.role): score += 1
+            if hair_color and matches(hair_color, t.hair_color): score += 1
+            if hair_type and matches(hair_type, t.hair_type): score += 1
+            if eye_color and matches(eye_color, t.eye_color): score += 1
+            if skin_color and matches(skin_color, t.skin_color): score += 1
+
+            try:
+                if height and t.height is not None and float(t.height) == float(height): score += 1
+            except (ValueError, TypeError): pass
+            try:
+                if bust and t.bust is not None and float(t.bust) == float(bust): score += 1
+            except (ValueError, TypeError): pass
+            try:
+                if waist and t.waist is not None and float(t.waist) == float(waist): score += 1
+            except (ValueError, TypeError): pass
+            try:
+                if hips and t.hips is not None and float(t.hips) == float(hips): score += 1
+            except (ValueError, TypeError): pass
+            try:
+                if shoe_size and t.shoe_size is not None and int(t.shoe_size) == int(shoe_size): score += 1
+            except (ValueError, TypeError): pass
+
+            if shoot_date and t.available_date:
+                try:
+                    user_dates = [datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d]
+                    if t.available_date in user_dates:
+                        score += 1
+                except ValueError:
+                    pass
+            
+            if score > 0:
+                scored_talents.append((score, t))
+
+        scored_talents.sort(key=lambda x: x[0], reverse=True)
+        top_results = [item[1] for item in scored_talents[:100]]
+        total_results = len(scored_talents)
         
-        availability_list = []
-        if t.availability:
-            if isinstance(t.availability, str):
-                availability_list = [d.strip() for d in t.availability.split(",") if d.strip()]
-            elif isinstance(t.availability, list):
-                availability_list = t.availability
-
-        result_list.append({
-            "id": t.id,
-            "photos": photos,
-            "availability": availability_list,
-            "name": t.name,
-            "height": t.height,
-            "bust": t.bust,
-            "waist": t.waist,
-            "hips": t.hips,
-            "dress_size": t.dress_size,
-            "shoe_size": t.shoe_size,
-            "hair": t.hair,
-            "hair_type": t.hair_type,
-            "eyes": t.eyes,
-            "skin": t.skin_color,
-            "agent_name": t.agent_name,
-            "budget_tier": t.budget_tier,
-        })
-    db.close()
-    return result_list
+        result_list = []
+        for t in top_results:
+            result_list.append({
+                "talent_id": t.talent_id,
+                "agent_name": t.agent.full_name if t.agent else "Unknown",
+                "name": t.name,
+                "role": t.role,
+                "dob": t.dob,
+                "gender": t.gender,
+                "height": t.height,
+                "bust": t.bust,
+                "waist": t.waist,
+                "hips": t.hips,
+                "shoe_size": t.shoe_size,
+                "eye_color": t.eye_color,
+                "hair_type": t.hair_type,
+                "hair_color": t.hair_color,
+                "skin_color": t.skin_color,
+                "location": t.location,
+                "continent": t.continent,
+                "country": t.country,
+                "is_available": t.is_available,
+                "available_date": t.available_date,
+                "images": [img.image for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
+            })
+        
+        return {
+            "talents": result_list,
+            "total_results": total_results
+        }
+    finally:
+        db.close()
 
 def reasoner_node(state: AgentState):
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY, max_retries=3)
@@ -174,7 +214,7 @@ def custom_tool_node(state: AgentState):
             result = generate_casting.invoke(tool_call["args"])
             
             outputs.append(ToolMessage(
-                content=f"Search completed. Found {len(result)} talents. The full list has been sent to the user interface.",
+                content=f"Search completed. Found {result['total_results']} talents. The full list has been sent to the user interface.",
                 name=tool_call["name"],
                 tool_call_id=tool_call["id"],
                 artifact=result
@@ -195,3 +235,48 @@ graph.add_conditional_edges(
 graph.add_edge("tools", "agent") 
 
 app_graph = graph.compile()
+
+def time_ago(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "never"
+
+    # If the datetime from DB is timezone-aware, compare it with an aware datetime.now()
+    if dt.tzinfo:
+        now = datetime.now(dt.tzinfo)
+    else:
+        # If it's naive, compare with a naive datetime.now()
+        now = datetime.now()
+
+    delta = now - dt
+
+    if delta.days > 0:
+        return f"{delta.days} day{'s' if delta.days > 1 else ''} ago"
+    
+    hours = delta.seconds // 3600
+    if hours > 0:
+        return f"{hours} hour{'s' if hours > 1 else ''} ago"
+
+    minutes = delta.seconds // 60
+    if minutes > 0:
+        return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+    
+    return "just now"
+
+def parse_budget(budget_str):
+    if not budget_str: return None, None
+    
+    clean_str = str(budget_str).replace(',', '').replace('$', '').replace('£', '').replace('€', '')
+    nums = re.findall(r'\d+(?:\.\d+)?', clean_str)
+    
+    if not nums: return None, None
+    
+    try:
+        vals = [Decimal(n) for n in nums]
+    except InvalidOperation:
+        return None, None
+
+    if len(vals) == 1:
+        return vals[0], vals[0]
+    
+    v1, v2 = vals[0], vals[1]
+    return min(v1, v2), max(v1, v2)

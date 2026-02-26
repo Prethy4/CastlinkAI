@@ -1,103 +1,190 @@
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from datetime import date, datetime
+from decimal import Decimal
 
 class OptionalDetails(BaseModel):
     location: Optional[str] = None
-    shoot_dates: Optional[List[str]] = None
-    budget_range: Optional[int] = None
-    job_type: Optional[str] = None
+    shoot_date: Optional[List[str]] = None
 
 class TalentResponse(BaseModel):
-    id: str
-    name: Optional[str] = None
-    availability: Optional[List[str]] = None
-    photos: Optional[str] = None
-    height: Optional[str] = None
-    bust: Optional[str] = None
-    waist: Optional[str] = None
-    hips: Optional[str] = None
-    dress_size: Optional[str] = None
-    shoe_size: Optional[str] = None
-    hair: Optional[str] = None
-    hair_type: Optional[str] = None
-    eyes: Optional[str] = None
-    skin: Optional[str] = None
-    agent_name: Optional[str] = None
-    budget_tier: Optional[int] = None
-    actions: Dict[str, str] = Field(
-        default_factory=lambda: {
-            # "save": "POST /save-talent",
-            # "book": "POST /book-talent",
-            # "calendar": "GET /talent/{id}/calendar",
-            # "selftape": "POST /talent/{id}/selftape",
-            # "request_virtual_casting": "GET /talent/{id}/request_virtual_casting",
-            # "request_polas": "POST /talent/{id}/polas"
-        }
-    )
+    talent_id: int 
+    images: List[str] = []
+    is_available: bool
+    name: str
+    # added_by_agent_id: int
+    agent_name: str
+    role: str
+    dob: Optional[date] = None
+    gender: str
+    height: Optional[Decimal] = None
+    bust: Optional[Decimal] = None
+    waist: Optional[Decimal] = None
+    hips: Optional[Decimal] = None
+    shoe_size: Optional[int] = None
+    eye_color: str
+    hair_type: str
+    hair_color: str
+    skin_color: str
+    location: str
+    continent: str
+    country: str
+    available_date: Optional[date] = None
 
 class ChatRequest(BaseModel):
-    user_id: str
+    user_id: int
+    session_id: Optional[str] = None
     message: str
     location: Optional[str] = None
-    shoot_dates: Optional[List[str]] = None
-    budget_range: Optional[int] = None
+    shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
+    budget: Optional[str] = Field(None, alias="budget_range")
     job_type: Optional[str] = None
     save_as_draft: bool = False
 
+    class Config:
+        populate_by_name = True
+        allow_population_by_field_name = True
+
 class UserRequest(BaseModel):
-    user_id: str
+    user_id: int
 
 class SessionRequest(BaseModel):
-    user_id: str
+    user_id: int
     session_id: str
     
 class DraftRequest(BaseModel):
-    id: int
-    user_id: str
+    draft_id: int
+    user_id: int
     
 class DraftUserRequest(BaseModel):
-    user_id: str
+    user_id: int
 
-class ChatResponse(BaseModel):
+class GenerateCastingRequest(BaseModel):
+    user_id: int
     session_id: str
-    response_text: str
-    suggested_talents: List[TalentResponse] = []
 
-# class SaveTalentRequest(BaseModel):
-#     user_id: str
-#     session_id: str
-#     talent_id: str
+class SaveTalentRequest(BaseModel):
+    user_id: int
+    session_id: str
+    talent_id: int
 
-# class BookTalentRequest(BaseModel):
-#     user_id: str
-#     session_id: Optional[str] = None
-#     talent_id: str
+class BookTalentRequest(BaseModel):
+    user_id: int
+    session_id: Optional[str] = None
+    talent_id: int
 
 class ChatMessageResponse(BaseModel):
     sender: str
     content: str
-    timestamp: str
+    timestamp: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
-class DraftResponse(BaseModel):
-    id: int
-    user_id: str
-    session_id: str
-    phase: str
-    saved_filters: Dict[str, Any] = {}
-    last_updated: str
+class JobResponse(BaseModel):
+    job_id: int
+    job_created_by_id: int
+    session_id: Optional[str] = None
+    status: str
+    title: str
+    job_type: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    budget: Optional[str] = None
+    applicants_count: int
+    shortlisted_count: int
+    selftapes_count: int
+    created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
-class ChatSessionResponse(BaseModel):
-    id: str
-    user_id: str
-    created_at: str
+class JobResultResponse(BaseModel):
+    job_id: int
+    job_created_by_id: int
+    session_id: Optional[str] = None
+    status: str
+    title: str
+    job_type: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    created_at: datetime
+    applicants_count: int
+    shortlisted_count: int
+    selftapes_count: int
+    shoot_date: Optional[str] = None
+    suggested_talents: List[TalentResponse] = []
     messages: List[ChatMessageResponse] = []
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+class DraftResponse(BaseModel):
+    draft_id: int
+    user_id: int
+    session_id: str
+    # phase: str
+    saved_filters: Dict[str, Any] = {}
+    last_updated: Optional[datetime] = None
+    messages: List[ChatMessageResponse] = []
+
+    class Config:
+        from_attributes = True
+
+class DraftsSavedFilters(BaseModel):
+    job_type: Optional[str] = Field(None, alias="Job type")
+    message: Optional[str] = Field(None, alias="Message")
+
+    class Config:
+        populate_by_name = True
+        allow_population_by_field_name = True
+
+class UserDraftResponse(BaseModel):
+    draft_id: int
+    user_id: int
+    session_id: str
+    saved_filters: DraftsSavedFilters
+    updated: str = Field(..., alias="Updated")
+    last_updated: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+        allow_population_by_field_name = True
+
+class ContinueDraftResponse(BaseModel):
+    session_id: str
+    messages: List[ChatMessageResponse] = []
+    saved_filters: Dict[str, Any] = {}
+
+    class Config:
+        from_attributes = True
+
+class ConversationResponse(BaseModel):
+    text: str
+
+class PaginationResponse(BaseModel):
+    total_results: int
+    page: int
+    per_page: int
+    has_next: bool
+
+class TalentDataResponse(BaseModel):
+    talents: List[TalentResponse] = []
+
+class WrappedChatResponse(BaseModel):
+    session_id: str
+    timestamp: str
+    conversation: ConversationResponse
+    pagination: PaginationResponse
+    data: TalentDataResponse
+
+class ChatSessionResponse(BaseModel):
+    session_id: str
+    user_id: int
+    created_at: datetime
+    messages: List[ChatMessageResponse] = []
+
+    class Config:
+        from_attributes = True
