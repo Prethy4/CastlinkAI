@@ -1,4 +1,3 @@
-from datetime import datetime
 from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, text, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship 
 from sqlalchemy.sql import func
@@ -48,15 +47,15 @@ class TalentImage(Base):
     
     talent = relationship("Talent", back_populates="images")
 
-#jobs_shortlisted_talents
-class SavedTalent(Base):
-    __tablename__ = "jobs_saved_talents"
+# #jobs_shortlisted_talents
+# class SavedTalent(Base):
+#     __tablename__ = "jobs_saved_talents"
     
-    saved_id = Column(Integer, primary_key=True, index=True)
-    user_session_id = Column(String, index=True)
-    talent_id = Column(Integer, ForeignKey("jobs_talent_talent.talent_id"))
-    saved_at = Column(String)
-    user_id = Column(BigInteger)
+#     saved_id = Column(Integer, primary_key=True, index=True)
+#     user_session_id = Column(String, index=True)
+#     talent_id = Column(Integer, ForeignKey("jobs_talent_talent.talent_id"))
+#     saved_at = Column(String)
+#     user_id = Column(BigInteger)
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -82,14 +81,14 @@ class ChatMessage(Base):
     job_type = Column(String, nullable=True)
     session = relationship("ChatSession", back_populates="messages")
     
-#jobs_talent_bookings
-class Booking(Base):
-    __tablename__ = "jobs_talent_bookings"
+# #jobs_talent_bookings
+# class Booking(Base):
+#     __tablename__ = "jobs_talent_bookings"
     
-    booking_id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(BigInteger)
-    talent_id = Column(Integer, ForeignKey("jobs_talent_talent.talent_id"))
-    booking_date = Column(String)
+#     booking_id = Column(Integer, primary_key=True, index=True)
+#     user_id = Column(BigInteger)
+#     talent_id = Column(Integer, ForeignKey("jobs_talent_talent.talent_id"))
+#     booking_date = Column(String)
     
 #jobs_talent_drafts
 class Draft(Base):

@@ -1,31 +1,33 @@
-import os
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
-from database import init_db, get_db, Talent, ChatSession, ChatMessage, Draft, Job, SavedTalent, Booking, JobAIResult
-from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, UserRequest, SessionRequest, DraftRequest, JobResponse, GenerateCastingRequest, SaveTalentRequest, BookTalentRequest, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, ConversationResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters
+from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth #SavedTalent, Booking,
+from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, UserRequest, SessionRequest, DraftRequest, JobResponse, GenerateCastingRequest, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, ConversationResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters # SaveTalentRequest, BookTalentRequest,
 from services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget
 from typing import List, Optional
 import json
-
-limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please try again later or contact the support.")
-
-MANDATORY_FIELDS = ["location", "shoot_date", "budget", "job_type", "gender", "skin_color"]
+from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize database
 init_db()
 
-# api_key = os.getenv("OPENAI_API_KEY")
-# if api_key:
-#     print(f"DEBUG: OpenAI API Key loaded. Ends in: ...{api_key[-4:]}")
-# else:
-#     print("DEBUG: OPENAI_API_KEY not found in environment variables.")
-
 app = FastAPI(title="AI-Powered Casting")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please try again later or contact the support.")
+
+MANDATORY_FIELDS = ["location", "shoot_date", "budget", "job_type", "gender", "skin_color"]
 
 ##########-------health check-------##########
 
@@ -42,8 +44,12 @@ async def send_message(
     ):
     """Chat services for conversation with the chatbot"""
     try:
-        message = request.message
         user_id = request.user_id
+        user = db.query(UserAuth).filter(UserAuth.user_id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        message = request.message
         session_id = request.session_id
         location = request.location
         shoot_date = request.shoot_date
@@ -98,7 +104,7 @@ async def send_message(
             if cleaned_dates:
                 filters['shoot_date'] = cleaned_dates
 
-        # Data sent with the message is saved to Draft immediately
+
         draft = db.query(Draft).filter(Draft.session_id == chat_session.session_id).first()
         if not draft:
             draft = Draft(session_id=chat_session.session_id, user_id=user_id)
@@ -210,26 +216,29 @@ async def send_message(
                     total_results = msg.artifact.get('total_results', len(final_talents))
                     break
 
-        page = 1
-        per_page = len(final_talents) if final_talents else 10
-        has_next = total_results > per_page
+        response_payload = {
+            "session_id": chat_session.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "conversation": ConversationResponse(text=response_content),
+        }
 
-        return WrappedChatResponse(
-            session_id=chat_session.session_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            conversation=ConversationResponse(text=response_content),
-            pagination=PaginationResponse(
+        if total_results > 0:
+            page = 1
+            per_page = len(final_talents) if final_talents else 10
+            has_next = total_results > per_page
+            response_payload["pagination"] = PaginationResponse(
                 total_results=total_results,
                 page=page,
                 per_page=per_page,
                 has_next=has_next
-            ),
-            data=TalentDataResponse(talents=final_talents)
-        )
-    except Exception as e:
+            )
+            response_payload["data"] = TalentDataResponse(talents=final_talents)
+
+        return WrappedChatResponse(**response_payload)
+    except Exception:
         db.rollback()
-        raise e
-        # raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
+        # raise e
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
 
 ###########----------chat session-----------############
 
@@ -257,20 +266,20 @@ async def get_session_details(
         raise HTTPException(status_code=404, detail="Chat not found")
     return session
 
-###########----------delete chat-----------############
+# ###########----------delete chat-----------############
 
-@app.delete("/api/chat/delete-session-id", dependencies=[Depends(limiter)])
-async def delete_session(
-    request: SessionRequest, 
-    db: Session = Depends(get_db)
-    ):
+# @app.delete("/api/chat/delete-session-id", dependencies=[Depends(limiter)])
+# async def delete_session(
+#     request: SessionRequest, 
+#     db: Session = Depends(get_db)
+#     ):
 
-        session = db.query(ChatSession).filter(ChatSession.session_id == request.session_id).first()
-        if not session:
-            raise HTTPException(status_code=404, detail="Chat not found")
-        db.delete(session)
-        db.commit()
-        return {"status": "success", "message": "Chat deleted"}
+#         session = db.query(ChatSession).filter(ChatSession.session_id == request.session_id).first()
+#         if not session:
+#             raise HTTPException(status_code=404, detail="Chat not found")
+#         db.delete(session)
+#         db.commit()
+#         return {"status": "success", "message": "Chat deleted"}
     
 #############----------retrives all draft state------------###############
 
@@ -576,33 +585,33 @@ async def view_ai_result(
     return response
 
     
-##########---------save a talent-------############ 
+# ##########---------save a talent-------############ 
 
-@app.post("/save-talent")
-async def save_talents(
-    request: SaveTalentRequest, 
-    db: Session = Depends(get_db)
-    ):
-    """ 
-    save a talent for further view
-    """
-    # Check if talent exists
-    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
-    if not talent:
-        raise HTTPException(status_code=404, detail="Talent not found")
+# @app.post("/save-talent")
+# async def save_talents(
+#     request: SaveTalentRequest, 
+#     db: Session = Depends(get_db)
+#     ):
+#     """ 
+#     save a talent for further view
+#     """
+#     # Check if talent exists
+#     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+#     if not talent:
+#         raise HTTPException(status_code=404, detail="Talent not found")
     
-    saved = SavedTalent(
-        user_session_id=request.session_id,
-        user_id=request.user_id,
-        talent_id=request.talent_id,
-        saved_at=str(date.today())
-    )
-    db.add(saved)
-    db.commit()
-    return {
-            "status": "success", 
-            "message": f"Talent {talent.name} saved."
-            }
+#     saved = SavedTalent(
+#         user_session_id=request.session_id,
+#         user_id=request.user_id,
+#         talent_id=request.talent_id,
+#         saved_at=str(date.today())
+#     )
+#     db.add(saved)
+#     db.commit()
+#     return {
+#             "status": "success", 
+#             "message": f"Talent {talent.name} saved."
+#             }
 
 # ########--------View calendar of a member that shows which dates they are available---------#########
 
@@ -676,47 +685,47 @@ async def save_talents(
 # #             "message": "polas request endpoint"
 # #             }
     
-@app.post("/book-talent")
-async def book_talent(
-    request: BookTalentRequest, 
-    db: Session = Depends(get_db)
-    ):
-    """
-    Book a talent. Automatically saves the talent if not already saved.
-    """
-    # To check if talent exists
-    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
-    if not talent:
-        raise HTTPException(status_code=404, detail="Talent not found")
+# @app.post("/book-talent")
+# async def book_talent(
+#     request: BookTalentRequest, 
+#     db: Session = Depends(get_db)
+#     ):
+#     """
+#     Book a talent. Automatically saves the talent if not already saved.
+#     """
+#     # To check if talent exists
+#     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+#     if not talent:
+#         raise HTTPException(status_code=404, detail="Talent not found")
 
-    # To check if already saved
-    saved = db.query(SavedTalent).filter(
-        SavedTalent.user_id == request.user_id,
-        SavedTalent.talent_id == request.talent_id
-    ).first()
+#     # To check if already saved
+#     saved = db.query(SavedTalent).filter(
+#         SavedTalent.user_id == request.user_id,
+#         SavedTalent.talent_id == request.talent_id
+#     ).first()
 
-    #if not saved than saves
-    if not saved:
-        saved = SavedTalent(
-            user_session_id=request.session_id or "direct_booking",
-            user_id=request.user_id,
-            talent_id=request.talent_id,
-            saved_at=str(date.today())
-        )
-        db.add(saved)
+#     #if not saved than saves
+#     if not saved:
+#         saved = SavedTalent(
+#             user_session_id=request.session_id or "direct_booking",
+#             user_id=request.user_id,
+#             talent_id=request.talent_id,
+#             saved_at=str(date.today())
+#         )
+#         db.add(saved)
 
-    booking = Booking(     # Create Booking
-        user_id=request.user_id,
-        talent_id=request.talent_id,
-        booking_date=str(datetime.now())
-    )
-    db.add(booking) #add booking
-    db.commit()
+#     booking = Booking(     # Create Booking
+#         user_id=request.user_id,
+#         talent_id=request.talent_id,
+#         booking_date=str(datetime.now())
+#     )
+#     db.add(booking) #add booking
+#     db.commit()
     
-    return {
-        "status": "success",
-        "message": f"Talent {talent.name} booked successfully."
-    }
+#     return {
+#         "status": "success",
+#         "message": f"Talent {talent.name} booked successfully."
+#     }
 
 if __name__ == "__main__":
     import uvicorn

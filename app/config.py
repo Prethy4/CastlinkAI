@@ -7,7 +7,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "DATABASE_LOCAL_URL")
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-OPENAI_CHAT_MODEL = "gpt-5-mini"  
+OPENAI_CHAT_MODEL = "gpt-5.1"  #gpt-5-mini
 
 SYSTEM_PROMPT = """
 You are an Elite Casting Director.

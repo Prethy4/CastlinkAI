@@ -74,7 +74,6 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     User message: "{user_input}"
     
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
-    If the user provides a role type like 'supporting', 'lead', or 'extra', map it to 'role'.
     """
     try:
         result = structured_llm.invoke(prompt)

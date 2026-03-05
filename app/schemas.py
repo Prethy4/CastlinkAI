@@ -177,8 +177,8 @@ class WrappedChatResponse(BaseModel):
     session_id: str
     timestamp: str
     conversation: ConversationResponse
-    pagination: PaginationResponse
-    data: TalentDataResponse
+    pagination: Optional[PaginationResponse] = None
+    data: Optional[TalentDataResponse] = None
 
 class ChatSessionResponse(BaseModel):
     session_id: str
