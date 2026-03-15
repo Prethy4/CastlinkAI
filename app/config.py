@@ -8,20 +8,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "DATABASE_LOCAL_URL")
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 OPENAI_CHAT_MODEL = "gpt-5.1"  #gpt-5-mini
-
-SYSTEM_PROMPT = """
-You are an Elite Casting Director.
-Your goal is to collect 6 mandatory fields: Location, Shoot Date, Budget, Job Type, Gender, and Skin Color.
-Current info: {filters}
-
-Rules:
-1. Ask for missing mandatory fields first.
-2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
-3. If the user provides appearance details, call 'generate_casting'.
-4. If the user declines to provide more details, call 'generate_casting'.
-5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
-
-Be concise."""
+# JWT Authentication
+JWT_SECRET_KEY=os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
 
 
 

@@ -1,14 +1,13 @@
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, AIMessage, ToolMessage, BaseMessage
+from langchain_core.messages import SystemMessage, ToolMessage, BaseMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Annotated, Optional
 from fastapi import Request, HTTPException, status
-from sqlalchemy import or_
 from database import SessionLocal, Talent
-from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL, SYSTEM_PROMPT
+from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
 from datetime import datetime, date
 import json
 import time
@@ -44,6 +43,10 @@ class AgentState(BaseModel):
     filters: Dict[str, Any] = {}
     found_talents: List[Dict] = []
 
+class GeneratedJobInfo(BaseModel):
+    title: str = Field(..., description="A concise and catchy title for the casting job.")
+    description: str = Field(..., description="A one-line summary of the job description.")
+
 class ExtractedFilters(BaseModel):
     location: Optional[str] = Field(None, description="Location")
     continent: Optional[str] = Field(None, description="Continent")
@@ -53,13 +56,13 @@ class ExtractedFilters(BaseModel):
     eye_color: Optional[str] = Field(None, description="Eye Color")
     skin_color: Optional[str] = Field(None, description="Skin Color")
     shoot_date: Optional[List[str]] = Field(None, description="Shoot Dates")
-    role: Optional[str] = Field(None, description="Role")
     hair_type: Optional[str] = Field(None, description="Hair Type")
     height: Optional[str] = Field(None, description="Height")
     bust: Optional[str] = Field(None, description="Bust")
     waist: Optional[str] = Field(None, description="Waist")
     hips: Optional[str] = Field(None, description="Hips")
     shoe_size: Optional[str] = Field(None, description="Shoe Size")
+    dress_size: Optional[str] = Field(None, description="Dress Size")
     budget: Optional[str] = Field(None, description="Budget")
     job_type: Optional[str] = Field(None, description="Job Type")
 
@@ -81,27 +84,58 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     except Exception as e:
         return {}
 
+def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
+    """Generates a job title and description from a list of messages."""
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0.2, api_key=OPENAI_API_KEY)
+    structured_llm = llm.with_structured_output(GeneratedJobInfo)
+    
+    conversation_summary = "\n".join(messages)
+    
+    prompt = f"""
+    Based on the following conversation snippets, generate a concise job title and a one-line job description for a casting call.
+
+    Conversation:
+    ---
+    {conversation_summary}
+    ---
+
+    Example Output:
+    Title: Runway Model Show
+    Description: Seeking experienced runway models for a high-fashion event in Los Angeles.
+
+    Generate the title and description.
+    NOTE: Never add any physical or facial features in Title and Description. You may add gender or job type. 
+    """
+    
+    try:
+        result = structured_llm.invoke(prompt)
+        return result
+    except Exception as e:
+        return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.")
+
 def generate_ask_response(missing_fields: List[str]) -> str:
     """Generates a polite question to ask for missing mandatory fields."""
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0.6, api_key=OPENAI_API_KEY)
     prompt = f"""
-    You are a Casting Assistant. You need to collect the following missing mandatory fields: {', '.join(missing_fields)}.
-    Politely ask the user for ONE or TWO of these fields. Keep it short and professional.
+    You are a Casting Assistant helping a user find talent. You need to collect the following missing criteria for the talent search: {', '.join(missing_fields)}.
+    Politely ask the user for these criteria about the talent they are looking for.
+    For example, if you need 'gender', ask 'What gender are you looking for in the talent?'.
+    Keep the question short, professional, and focused on the talent search.
     """
     return llm.invoke(prompt).content
 
 @tool
 def generate_casting(location: str = None, continent: str = None, country: str = None,
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
-                     shoot_date: List[str] = None, role: str = None, hair_type: str = None,
+                     shoot_date: List[str] = None, hair_type: str = None,
                      height: str = None, bust: str = None, waist: str = None, hips: str = None, budget: str = None, job_type: str = None,
-                     shoe_size: str = None):
+                     shoe_size: str = None, dress_size: str = None):
     """
     Search for talent. Returns ranked recommendations based on matched criteria.
     """
     db = SessionLocal()
     try:
-        talents = db.query(Talent).outerjoin(Talent.agent).filter(Talent.is_available == True).all()
+        talents = db.query(Talent).outerjoin(Talent.agent).filter(Talent.is_active == True).all()
         
         scored_talents = []
         
@@ -119,15 +153,20 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             if continent and matches(continent, t.continent): score += 1
             if country and matches(country, t.country): score += 1
             
-            # Strict gender match
             if gender:
-                if t.gender and gender.lower() == t.gender.lower():
-                    score += 1
+                g_input = gender.lower()
+                if g_input == "man": g_input = "male"
+                elif g_input == "woman": g_input = "female"
+                elif g_input in ["non-binary", "non binary"]: g_input = "nonbinary"
+                elif g_input in ["non-binary", "non binary"]: g_input = "transgender"
+
+                if not t.gender or t.gender.lower() != g_input:
+                    continue
+                score += 1
             
-            if role and matches(role, t.role): score += 1
-            if hair_color and matches(hair_color, t.hair_color): score += 1
+            if hair_color and matches(hair_color, t.hair_colour): score += 1
             if hair_type and matches(hair_type, t.hair_type): score += 1
-            if eye_color and matches(eye_color, t.eye_color): score += 1
+            if eye_color and matches(eye_color, t.eye_colour): score += 1
             if skin_color and matches(skin_color, t.skin_color): score += 1
 
             try:
@@ -145,14 +184,18 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             try:
                 if shoe_size and t.shoe_size is not None and int(t.shoe_size) == int(shoe_size): score += 1
             except (ValueError, TypeError): pass
+            try:
+                if dress_size and t.dress_size is not None and int(t.dress_size) == int(dress_size): score += 1
+            except (ValueError, TypeError): pass
 
-            if shoot_date and t.available_date:
-                try:
-                    user_dates = [datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d]
-                    if t.available_date in user_dates:
-                        score += 1
-                except ValueError:
-                    pass
+# add it again after availavle date added on database
+            # if shoot_date and t.available_date:
+            #     try:
+            #         user_dates = [datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d]
+            #         if t.available_date in user_dates:
+            #             score += 1
+            #     except ValueError:
+            #         pass
             
             if score > 0:
                 scored_talents.append((score, t))
@@ -167,24 +210,24 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "talent_id": t.talent_id,
                 "agent_name": t.agent.full_name if t.agent else "Unknown",
                 "name": t.name,
-                "role": t.role,
-                "dob": t.dob,
+                "date_of_birth": t.date_of_birth,
                 "gender": t.gender,
                 "height": t.height,
                 "bust": t.bust,
                 "waist": t.waist,
                 "hips": t.hips,
                 "shoe_size": t.shoe_size,
-                "eye_color": t.eye_color,
+                "dress_size": t.dress_size,
+                "eye_color": t.eye_colour,
                 "hair_type": t.hair_type,
-                "hair_color": t.hair_color,
+                "hair_color": t.hair_colour,
                 "skin_color": t.skin_color,
                 "location": t.location,
                 "continent": t.continent,
                 "country": t.country,
-                "is_available": t.is_available,
-                "available_date": t.available_date,
-                "images": [img.image for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
+                "is_active": t.is_active,
+                # "available_date": t.available_date,
+                "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)[:1]] if t.images else [],
             })
         
         return {
@@ -195,6 +238,22 @@ def generate_casting(location: str = None, continent: str = None, country: str =
         db.close()
 
 def reasoner_node(state: AgentState):
+    SYSTEM_PROMPT = """
+    You are an Elite Casting Director helping a user find talent. Your primary role is to use the 'generate_casting' tool once all mandatory criteria are met.
+    All 6 mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) have been collected.
+    Current search criteria: {filters}
+
+    Your task now is to refine the search.
+
+    Rules:
+    1. Ask for missing mandatory fields first.
+    2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
+    3. If the user provides appearance details, call 'generate_casting'.
+    4. If the user declines to provide more details, call 'generate_casting'.
+    5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
+
+    Be concise."""
+    
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY, max_retries=3)
     tools = [generate_casting]
     llm_with_tools = llm.bind_tools(tools)
@@ -239,11 +298,9 @@ def time_ago(dt: Optional[datetime]) -> str:
     if not dt:
         return "never"
 
-    # If the datetime from DB is timezone-aware, compare it with an aware datetime.now()
     if dt.tzinfo:
         now = datetime.now(dt.tzinfo)
     else:
-        # If it's naive, compare with a naive datetime.now()
         now = datetime.now()
 
     delta = now - dt

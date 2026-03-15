@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, text, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship 
 from sqlalchemy.sql import func
 from config import DATABASE_URL
@@ -6,45 +6,45 @@ from config import DATABASE_URL
 Base = declarative_base()
 
 class UserAuth(Base):
-    __tablename__ = "account_userauth"
+    __tablename__ = "accounts_user"
     
     user_id = Column(BigInteger, primary_key=True, index=True)
     full_name = Column(String, nullable=False)
 
 class Talent(Base):
-    __tablename__ = "jobs_talent_talent"
+    __tablename__ = "talents"
     
-    talent_id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    role = Column(String, nullable=False)
-    dob = Column(Date, nullable=True)
-    gender = Column(String, nullable=False)
-    height = Column(Numeric, nullable=True)
-    bust = Column(Numeric, nullable=True)
-    waist = Column(Numeric, nullable=True)
-    hips = Column(Numeric, nullable=True)
-    shoe_size = Column(Integer, nullable=True)
-    eye_color = Column(String, nullable=False)
-    hair_type = Column(String, nullable=False)
-    hair_color = Column(String, nullable=False)
-    skin_color = Column(String, nullable=False)
-    location = Column(String, nullable=False)
-    continent = Column(String, nullable=False)
-    country = Column(String, nullable=False)
-    is_available = Column(Boolean, nullable=False)
-    available_date = Column(Date, nullable=True)
-    added_by_agent_id = Column(BigInteger, ForeignKey("account_userauth.user_id"), nullable=False)
-    
+    talent_id = Column(BigInteger, primary_key=True)
+    name = Column(String, nullable=False) 
+    #role = Column(String, nullable=False)
+    date_of_birth  = Column(Date, nullable=True)
+    gender = Column(String(20), nullable=False)
+    height = Column(String(50), nullable=True)
+    bust = Column(String(50), nullable=True)
+    waist = Column(String(50), nullable=True)
+    hips = Column(String(50), nullable=True)
+    shoe_size = Column(String(50), nullable=True)
+    dress_size = Column(String(50), nullable=True)
+    eye_colour = Column(String(100), nullable=False)
+    hair_type = Column(String(100), nullable=False)
+    hair_colour = Column(String(100), nullable=False)
+    skin_color = Column(String(100), nullable=False)
+    location = Column(String(255), nullable=False)
+    continent = Column(String(100), nullable=False)
+    country = Column(String(100), nullable=False)
+    is_active = Column(Boolean, nullable=False)
+    # available_date = Column(Date, nullable=True) ###
+    agent_id = Column(BigInteger, ForeignKey("accounts_user.user_id"), nullable=False)
+
     agent = relationship("UserAuth", backref="talents")
     images = relationship("TalentImage", back_populates="talent")
 
 class TalentImage(Base):
-    __tablename__ = "jobs_talent_talentimage"
+    __tablename__ = "talent_images"
     
-    image_id = Column(Integer, primary_key=True)
-    image = Column(String, nullable=False)
-    talent_id = Column(Integer, ForeignKey("jobs_talent_talent.talent_id"))
-    
+    image_id = Column(BigInteger, primary_key=True)
+    image = Column(String(100), nullable=False)
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
     talent = relationship("Talent", back_populates="images")
 
 # #jobs_shortlisted_talents
@@ -107,7 +107,6 @@ class Draft(Base):
 
     session = relationship("ChatSession", back_populates="draft")
 
-#jobs_talent_job
 class Job(Base):
     __tablename__ = "jobs_talent_job"   
     
@@ -127,12 +126,12 @@ class Job(Base):
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     job_assigned_to_id = Column(
         BigInteger,
-        ForeignKey("account_userauth.user_id"),
+        ForeignKey("accounts_user.user_id"),
         nullable=True
     )
     job_created_by_id = Column(
         BigInteger,
-        ForeignKey("account_userauth.user_id"),
+        ForeignKey("accounts_user.user_id"),
         nullable=False
     )
 

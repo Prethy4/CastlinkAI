@@ -1,4 +1,5 @@
 .venv/
+.venv
 .env
 local_talent.db
 __pycache__/ 

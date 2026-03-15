@@ -11,18 +11,18 @@ class OptionalDetails(BaseModel):
 class TalentResponse(BaseModel):
     talent_id: int 
     images: List[str] = []
-    is_available: bool
+    is_active: bool
     name: str
     # added_by_agent_id: int
     agent_name: str
-    role: str
-    dob: Optional[date] = None
+    date_of_birth: Optional[date] = None
     gender: str
     height: Optional[Decimal] = None
     bust: Optional[Decimal] = None
     waist: Optional[Decimal] = None
     hips: Optional[Decimal] = None
-    shoe_size: Optional[int] = None
+    shoe_size: Optional[str] = None
+    dress_size: Optional[str] = None
     eye_color: str
     hair_type: str
     hair_color: str
@@ -30,47 +30,34 @@ class TalentResponse(BaseModel):
     location: str
     continent: str
     country: str
-    available_date: Optional[date] = None
+    #available_date: Optional[date] = None add again
 
 class ChatRequest(BaseModel):
-    user_id: int
     session_id: Optional[str] = None
     message: str
     location: Optional[str] = None
     shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
     budget: Optional[str] = Field(None, alias="budget_range")
     job_type: Optional[str] = None
+    title:  Optional[str] = None
+    description: Optional[str] = None
     save_as_draft: bool = False
+    generate_job: bool = False
 
     class Config:
         populate_by_name = True
-        allow_population_by_field_name = True
-
-class UserRequest(BaseModel):
-    user_id: int
 
 class SessionRequest(BaseModel):
-    user_id: int
     session_id: str
     
-class DraftRequest(BaseModel):
-    draft_id: int
-    user_id: int
-    
-class DraftUserRequest(BaseModel):
-    user_id: int
-
 class GenerateCastingRequest(BaseModel):
-    user_id: int
     session_id: str
 
 class SaveTalentRequest(BaseModel):
-    user_id: int
     session_id: str
     talent_id: int
 
 class BookTalentRequest(BaseModel):
-    user_id: int
     session_id: Optional[str] = None
     talent_id: int
 
@@ -138,7 +125,6 @@ class DraftsSavedFilters(BaseModel):
 
     class Config:
         populate_by_name = True
-        allow_population_by_field_name = True
 
 class UserDraftResponse(BaseModel):
     draft_id: int
@@ -151,7 +137,6 @@ class UserDraftResponse(BaseModel):
     class Config:
         from_attributes = True
         populate_by_name = True
-        allow_population_by_field_name = True
 
 class ContinueDraftResponse(BaseModel):
     session_id: str
@@ -164,7 +149,7 @@ class ContinueDraftResponse(BaseModel):
 class ConversationResponse(BaseModel):
     text: str
 
-class PaginationResponse(BaseModel):
+class PaginationResponse(BaseModel):    
     total_results: int
     page: int
     per_page: int
@@ -176,9 +161,10 @@ class TalentDataResponse(BaseModel):
 class WrappedChatResponse(BaseModel):
     session_id: str
     timestamp: str
-    conversation: ConversationResponse
+    conversation: str
     pagination: Optional[PaginationResponse] = None
     data: Optional[TalentDataResponse] = None
+    generated_job: Optional[JobResponse] = None
 
 class ChatSessionResponse(BaseModel):
     session_id: str
