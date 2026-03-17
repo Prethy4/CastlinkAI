@@ -16,7 +16,7 @@ class Talent(Base):
     
     talent_id = Column(BigInteger, primary_key=True)
     name = Column(String, nullable=False) 
-    #role = Column(String, nullable=False)
+    role = Column(String, nullable=True)
     date_of_birth  = Column(Date, nullable=True)
     gender = Column(String(20), nullable=False)
     height = Column(String(50), nullable=True)
@@ -38,6 +38,18 @@ class Talent(Base):
 
     agent = relationship("UserAuth", backref="talents")
     images = relationship("TalentImage", back_populates="talent")
+    available_dates = relationship("TalentAvailableDate", back_populates="talent")
+
+class TalentAvailableDate(Base):
+    __tablename__ = "talent_available_dates"
+    
+    availability_id = Column(BigInteger, primary_key=True, index=True)
+    available_date = Column(Date, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
+
+    talent = relationship("Talent", back_populates="available_dates")
 
 class TalentImage(Base):
     __tablename__ = "talent_images"

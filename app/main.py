@@ -312,8 +312,8 @@ async def send_message(
 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-        #raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
+        # raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
 
 ###########----------chat session-----------############
 

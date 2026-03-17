@@ -65,6 +65,7 @@ class ExtractedFilters(BaseModel):
     dress_size: Optional[str] = Field(None, description="Dress Size")
     budget: Optional[str] = Field(None, description="Budget")
     job_type: Optional[str] = Field(None, description="Job Type")
+    role: Optional[str] = Field(None, description="Role or Job Title for the talent (e.g. model, actor, singer)")
 
 def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
     """Extracts casting filters from user input using a lightweight LLM call."""
@@ -127,7 +128,7 @@ def generate_ask_response(missing_fields: List[str]) -> str:
 @tool
 def generate_casting(location: str = None, continent: str = None, country: str = None,
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
-                     shoot_date: List[str] = None, hair_type: str = None,
+                     shoot_date: List[str] = None, hair_type: str = None, role: str = None,
                      height: str = None, bust: str = None, waist: str = None, hips: str = None, budget: str = None, job_type: str = None,
                      shoe_size: str = None, dress_size: str = None):
     """
@@ -150,6 +151,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             if location:
                 if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
                     score += 1
+            if role and matches(role, t.role): score += 1
             if continent and matches(continent, t.continent): score += 1
             if country and matches(country, t.country): score += 1
             
@@ -188,14 +190,16 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 if dress_size and t.dress_size is not None and int(t.dress_size) == int(dress_size): score += 1
             except (ValueError, TypeError): pass
 
-# add it again after availavle date added on database
-            # if shoot_date and t.available_date:
-            #     try:
-            #         user_dates = [datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d]
-            #         if t.available_date in user_dates:
-            #             score += 1
-            #     except ValueError:
-            #         pass
+            if shoot_date and t.available_dates:
+                try:
+                    user_dates = set()
+                    for d in shoot_date:
+                        if d: user_dates.add(datetime.strptime(d.strip(), '%Y-%m-%d').date())
+                    
+                    talent_dates = {ad.available_date for ad in t.available_dates if ad.is_active}
+                    if not user_dates.isdisjoint(talent_dates):
+                        score += 1
+                except (ValueError, TypeError): pass
             
             if score > 0:
                 scored_talents.append((score, t))
@@ -210,6 +214,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "talent_id": t.talent_id,
                 "agent_name": t.agent.full_name if t.agent else "Unknown",
                 "name": t.name,
+                "role": t.role,
                 "date_of_birth": t.date_of_birth,
                 "gender": t.gender,
                 "height": t.height,

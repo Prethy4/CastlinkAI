@@ -13,6 +13,7 @@ class TalentResponse(BaseModel):
     images: List[str] = []
     is_active: bool
     name: str
+    role: Optional[str] = None
     # added_by_agent_id: int
     agent_name: str
     date_of_birth: Optional[date] = None
