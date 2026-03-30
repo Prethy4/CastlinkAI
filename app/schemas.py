@@ -14,23 +14,23 @@ class TalentResponse(BaseModel):
     is_active: bool
     name: str
     role: Optional[str] = None
-    # added_by_agent_id: int
-    agent_name: str
+    agent_id: Optional[int] = None
+    agent_name: Optional[str] = None
     date_of_birth: Optional[date] = None
-    gender: str
+    gender: Optional[str] = None
     height: Optional[Decimal] = None
     bust: Optional[Decimal] = None
     waist: Optional[Decimal] = None
     hips: Optional[Decimal] = None
     shoe_size: Optional[str] = None
     dress_size: Optional[str] = None
-    eye_color: str
-    hair_type: str
-    hair_color: str
-    skin_color: str
-    location: str
-    continent: str
-    country: str
+    eye_color: Optional[str] = None
+    hair_type: Optional[str] = None
+    hair_color: Optional[str] = None
+    skin_color: Optional[str] = None
+    location: Optional[str] = None
+    continent: Optional[str] = None
+    country: Optional[str] = None
     #available_date: Optional[date] = None add again
 
 class ChatRequest(BaseModel):
@@ -51,6 +51,10 @@ class ChatRequest(BaseModel):
 class SessionRequest(BaseModel):
     session_id: str
     
+class RequestTalentJobRequest(BaseModel):
+    job_id: int
+    talent_id: int
+
 class GenerateCastingRequest(BaseModel):
     session_id: str
 
@@ -83,6 +87,7 @@ class JobResponse(BaseModel):
     applicants_count: int
     shortlisted_count: int
     selftapes_count: int
+    ecastings_count: int
     created_at: datetime
 
     class Config:
@@ -101,8 +106,11 @@ class JobResultResponse(BaseModel):
     applicants_count: int
     shortlisted_count: int
     selftapes_count: int
+    ecastings_count: int
     shoot_date: Optional[str] = None
     suggested_talents: List[TalentResponse] = []
+    requested_selftapes: List[TalentResponse] = []
+    requested_ecastings: List[TalentResponse] = []
     messages: List[ChatMessageResponse] = []
 
     class Config:

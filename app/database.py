@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship 
 from sqlalchemy.sql import func
 from config import DATABASE_URL
@@ -103,6 +103,7 @@ class ChatMessage(Base):
 #     booking_date = Column(String)
     
 #jobs_talent_drafts
+
 class Draft(Base):
     __tablename__ = "jobs_talent_drafts"
     
@@ -134,6 +135,7 @@ class Job(Base):
     applicants_count = Column(Integer, nullable=False, default=0)
     shortlisted_count = Column(Integer, nullable=False, default=0)
     selftapes_count = Column(Integer, nullable=False, default=0)
+    ecastings_count = Column(Integer, nullable=False, default=0)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     job_assigned_to_id = Column(
@@ -166,6 +168,7 @@ class Job(Base):
         CheckConstraint('applicants_count >= 0'),
         CheckConstraint('shortlisted_count >= 0'),
         CheckConstraint('selftapes_count >= 0'),
+        CheckConstraint('ecastings_count >= 0'),
     )
 
 class JobAIResult(Base):
@@ -174,6 +177,8 @@ class JobAIResult(Base):
     result_id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
     suggested_talents = Column(JSON)
+    requested_selftapes = Column(JSON, nullable=True)
+    requested_ecastings = Column(JSON, nullable=True)
     shoot_date = Column(String, nullable=True)
 
 # Setup Engine
@@ -186,6 +191,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+
 
 def get_db():
     db = SessionLocal()

@@ -64,8 +64,8 @@ class ExtractedFilters(BaseModel):
     shoe_size: Optional[str] = Field(None, description="Shoe Size")
     dress_size: Optional[str] = Field(None, description="Dress Size")
     budget: Optional[str] = Field(None, description="Budget")
-    job_type: Optional[str] = Field(None, description="Job Type")
-    role: Optional[str] = Field(None, description="Role or Job Title for the talent (e.g. model, actor, singer)")
+    job_type: Optional[str] = Field(None, description="The category of the production (e.g. film, TV, commercial, theater, voiceover, modeling).")
+    role: Optional[str] = Field(None, description="The specific role for the talent (e.g. model, actor, singer).")
 
 def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
     """Extracts casting filters from user input using a lightweight LLM call."""
@@ -77,6 +77,9 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     Current known info: {current_filters}
     User message: "{user_input}"
     
+    The mandatory fields are: location, shoot_date, budget, job_type, gender, skin_color.
+    If the user input seems to be answering a question about 'job_type' (e.g. 'modeling', 'commercial'), ensure it is mapped to the 'job_type' field.
+
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
     """
     try:
@@ -151,7 +154,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             if location:
                 if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
                     score += 1
-            if role and matches(role, t.role): score += 1
+            if role and matches(job_type, t.role): score += 1
             if continent and matches(continent, t.continent): score += 1
             if country and matches(country, t.country): score += 1
             
@@ -212,6 +215,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
         for t in top_results:
             result_list.append({
                 "talent_id": t.talent_id,
+                "agent_id": t.agent_id,
                 "agent_name": t.agent.full_name if t.agent else "Unknown",
                 "name": t.name,
                 "role": t.role,

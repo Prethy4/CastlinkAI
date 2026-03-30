@@ -7,8 +7,8 @@ from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
-from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth
-from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters
+from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent
+from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest
 from services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from typing import List, Optional
 import json
@@ -77,7 +77,7 @@ async def send_message(
         db.add(user_msg)
         db.commit()
 
-        past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == chat_session.session_id).order_by(ChatMessage.message_id.desc()).limit(10).all()
+        past_messages = db.query(ChatMessage).filter(ChatMessage.session_id == chat_session.session_id).order_by(ChatMessage.message_id.desc()).limit(20).all()
         past_messages.reverse()
         msgs = []
         for m in past_messages:
@@ -126,7 +126,6 @@ async def send_message(
         filters.update(extracted_updates)
 
         # --- Update ChatMessage with specific fields ---
-   
         user_msg.location = filters.get("location")
         user_msg.budget = filters.get("budget")
         user_msg.job_type = filters.get("job_type")
@@ -167,7 +166,7 @@ async def send_message(
             final_state = {"filters": filters, "messages": [AIMessage(content=response_content)]}
         else:
             inputs = {"messages": msgs, "filters": filters}
-            final_state = app_graph.invoke(inputs, config={"recursion_limit": 5})
+            final_state = app_graph.invoke(inputs, config={"recursion_limit": 20})
             last_msg = final_state['messages'][-1]
             response_content = last_msg.content
         
@@ -202,8 +201,6 @@ async def send_message(
         draft.title = current_filters.get("title")
         draft.description = current_filters.get("description")
         draft.location = current_filters.get("location")
-        draft.title = current_filters.get("title")
-        draft.description = current_filters.get("description")
         draft.budget = current_filters.get("budget")
         draft.job_type = current_filters.get("job_type")
         s_dates = current_filters.get("shoot_date")
@@ -267,7 +264,8 @@ async def send_message(
                 title=job_title, description=job_description, location=d_location,
                 budget_min=budget_min, budget_max=budget_max, job_type=d_job_type,
                 status=current_filters.get("status") or "active",
-                applicants_count=total_applicants, shortlisted_count=0, selftapes_count=0
+                applicants_count=total_applicants, shortlisted_count=0, 
+                selftapes_count=0, ecastings_count=0
             )
             db.add(new_job)
             db.commit(); db.refresh(new_job)
@@ -523,31 +521,6 @@ async def get_user_jobs(
     
     return query.all()
 
-# @app.get("/api/jobs/{job_id}", response_model=JobResultResponse, dependencies=[Depends(limiter)])
-# async def get_job_result(
-#     job_id: int,
-#     request: UserRequest = Depends(),
-#     db: Session = Depends(get_db)
-# ):
-#     job = db.query(Job).filter(Job.id == job_id, Job.user_id == request.user_id).first()
-#     if not job:
-#         raise HTTPException(status_code=404, detail="Job not found")
-
-#     return JobResultResponse(
-#         id=job.id,
-#         user_id=job.user_id,
-#         status=job.status,
-#         job_type=job.job_type,
-#         first_message=job.first_message,
-#         location=job.location,
-#         shoot_date=job.shoot_date,
-#         budget_range=job.budget_range,
-#         total_applicants=job.total_applicants,
-#         total_shortlisted=job.shortlisted_count,
-#         total_selftapes=job.selftape_count,
-#         suggested_talents=[TalentResponse(**t) for t in (job.suggested_talents or [])]
-#     )
-
 ############-----------view AI results------------###############
 
 @app.get("/api/jobs/view-ai-result", response_model=JobResultResponse, dependencies=[Depends(limiter)])
@@ -563,8 +536,11 @@ async def view_ai_result(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    db.refresh(job)
     ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job.job_id).first()
     suggested_talents = ai_result.suggested_talents if ai_result else []
+    requested_selftapes_raw = ai_result.requested_selftapes if ai_result else []
+    requested_ecastings_raw = ai_result.requested_ecastings if ai_result else []
     shoot_date = ai_result.shoot_date if ai_result else None
 
     messages = []
@@ -578,11 +554,126 @@ async def view_ai_result(
         **job.__dict__,
         shoot_date=shoot_date,
         suggested_talents=[TalentResponse(**t) for t in (suggested_talents or [])],
+        requested_selftapes=[TalentResponse(**t) for t in (requested_selftapes_raw or [])],
+        requested_ecastings=[TalentResponse(**t) for t in (requested_ecastings_raw or [])],
         messages=[ChatMessageResponse.from_orm(m) for m in messages]
     )
     return response
 
+########---------request fot selftape--------############
+
+@app.post("/api/jobs/request-selftape", dependencies=[Depends(limiter)])
+async def request_selftape(
+    request: RequestTalentJobRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Endpoint to request a self-tape for a specific talent in a job."""
+    job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found")
+
+    db.refresh(job)
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job.job_id).first()
+    if not ai_result:
+        ai_result = JobAIResult(job_id=job.job_id, requested_selftapes=[])
+        db.add(ai_result)
     
+    selftapes_list = ai_result.requested_selftapes or []
+
+    if any(t.get('talent_id') == talent.talent_id for t in selftapes_list):
+        raise HTTPException(status_code=400, detail="talent already added")
+
+    job.selftapes_count = (job.selftapes_count or 0) + 1
+
+    talent_snapshot = {
+        "talent_id": talent.talent_id,
+        "job_id": job.job_id,
+        "name": talent.name,
+        "role": talent.role,
+        "gender": talent.gender,
+        "location": talent.location,
+        "country": talent.country,
+        "continent": talent.continent,
+        "is_active": talent.is_active,
+        "agent_id": talent.agent_id,
+        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
+        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)[:1]] if talent.images else [],
+        "eye_color": talent.eye_colour,
+        "hair_type": talent.hair_type,
+        "hair_color": talent.hair_colour,
+        "skin_color": talent.skin_color,
+        "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
+        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size
+    }
+    
+    ai_result.requested_selftapes = list(selftapes_list) + [talent_snapshot]
+ 
+    db.commit()
+    return {"status": "success", "message": f"Self-tape requested for {talent.name}"}
+
+#########--------request for e-casting--------##########
+
+@app.post("/api/jobs/request-ecasting", dependencies=[Depends(limiter)])
+async def request_ecasting(
+    request: RequestTalentJobRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Endpoint to request an e-casting for a specific talent in a job."""
+    job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found")
+
+    db.refresh(job)
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job.job_id).first()
+    if not ai_result:
+        ai_result = JobAIResult(job_id=job.job_id, requested_ecastings=[])
+        db.add(ai_result)
+    
+    ecastings_list = ai_result.requested_ecastings or []
+    
+    if any(t.get('talent_id') == talent.talent_id for t in ecastings_list):
+        raise HTTPException(status_code=400, detail="talent already added")
+
+    job.ecastings_count = (job.ecastings_count or 0) + 1
+
+    talent_snapshot = {
+        "talent_id": talent.talent_id,
+        "job_id": job.job_id,
+        "name": talent.name,
+        "role": talent.role,
+        "gender": talent.gender,
+        "location": talent.location,
+        "country": talent.country,
+        "continent": talent.continent,
+        "is_active": talent.is_active,
+        "agent_id": talent.agent_id,
+        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
+        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)[:1]] if talent.images else [],
+        "eye_color": talent.eye_colour,
+        "hair_type": talent.hair_type,
+        "hair_color": talent.hair_colour,
+        "skin_color": talent.skin_color,
+        "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
+        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size
+    }
+    
+    ai_result.requested_ecastings = list(ecastings_list) + [talent_snapshot]
+
+    db.commit()
+    return {"status": "success", "message": f"E-casting requested for {talent.name}"}
+
 # ##########---------save a talent-------############ 
 
 # @app.post("/save-talent")
@@ -630,58 +721,7 @@ async def view_ai_result(
 #         "available_on": talent.available_date
 #     }
 
-# # # @app.get("/talent/{talent_id}/calendar")
-# # # async def get_calendar(talent_id: str, db: Session = Depends(get_db)):
-# # #     """
-# # #     View calendar of a member that shows which dates they are available.
-# # #     """
-# # #     talent = db.query(Talent).filter(Talent.id == talent_id).first()
-# # #     if not talent:
-# # #         raise HTTPException(status_code=404, detail="Talent not found")
-# # #     
-# # #     return {
-# # #         "talent_id": talent.id,
-# # #         "name": talent.name,
-# # #         "availability": talent.availability
-# # #     }
 
-# #########----------upload selftape endpoint---------############
-
-# # @app.post("/talent/{talent_id}/selftape")
-# # async def upload_selftape(
-# #     talent_id: str
-# #     ):
-# #     """
-# #     request for an selftape
-# #     """
-# #     return {
-# #             "message": "Self-tape upload endpoint (add file handling here)"
-# #             }
-
-# # @app.get("/talent/{talent_id}/request_virtual_casting")
-# # async def get_request_virtual_casting(
-# #     talent_id: str, 
-# #     db: Session = Depends(get_db)
-# #     ):
-# #     """
-# #     request a virtual meet for casting
-# #     """
-# #     talent = db.query(Talent).filter(Talent.id == talent_id).first()
-# #     if not talent: raise HTTPException(404)
-# #     return {
-# #             "virtual meet endpoint": talent.virtual_meet
-# #             }
-
-# # @app.post("/talent/{talent_id}/polas")
-# # async def request_polas(
-# #     talent_id: str
-# #     ):
-# #     """
-# #     upload polas raw face images
-# #     """
-# #     return {
-# #             "message": "polas request endpoint"
-# #             }
     
 # @app.post("/book-talent")
 # async def book_talent(
