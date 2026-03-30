@@ -7,8 +7,8 @@ from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from langchain_core.messages import HumanMessage, AIMessage
-from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent
-from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest
+from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking
+from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination
 from services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from typing import List, Optional
 import json
@@ -162,7 +162,7 @@ async def send_message(
         response_content = ""
 
         if missing_keys:
-            response_content = generate_ask_response(missing_keys[:1])
+            response_content = generate_ask_response(missing_keys, message)
             final_state = {"filters": filters, "messages": [AIMessage(content=response_content)]}
         else:
             inputs = {"messages": msgs, "filters": filters}
@@ -265,7 +265,7 @@ async def send_message(
                 budget_min=budget_min, budget_max=budget_max, job_type=d_job_type,
                 status=current_filters.get("status") or "active",
                 applicants_count=total_applicants, shortlisted_count=0, 
-                selftapes_count=0, ecastings_count=0
+                selftapes_count=0, ecastings_count=0, polas_count=0
             )
             db.add(new_job)
             db.commit(); db.refresh(new_job)
@@ -511,7 +511,7 @@ async def get_user_jobs(
     if sort and sort.lower() != 'all':
         now = datetime.now(timezone.utc)
         if sort.lower() == 'urgent':
-            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_of_day = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             query = query.filter(Job.created_at >= start_of_day)
         elif sort.lower() == 'this week':
             week_ago = now - timedelta(days=7)
@@ -541,6 +541,7 @@ async def view_ai_result(
     suggested_talents = ai_result.suggested_talents if ai_result else []
     requested_selftapes_raw = ai_result.requested_selftapes if ai_result else []
     requested_ecastings_raw = ai_result.requested_ecastings if ai_result else []
+    requested_polas_raw = ai_result.requested_polas if ai_result else []
     shoot_date = ai_result.shoot_date if ai_result else None
 
     messages = []
@@ -556,6 +557,7 @@ async def view_ai_result(
         suggested_talents=[TalentResponse(**t) for t in (suggested_talents or [])],
         requested_selftapes=[TalentResponse(**t) for t in (requested_selftapes_raw or [])],
         requested_ecastings=[TalentResponse(**t) for t in (requested_ecastings_raw or [])],
+        requested_polas=[TalentResponse(**t) for t in (requested_polas_raw or [])],
         messages=[ChatMessageResponse.from_orm(m) for m in messages]
     )
     return response
@@ -609,7 +611,8 @@ async def request_selftape(
         "hair_color": talent.hair_colour,
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
-        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size
+        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
+        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
     }
     
     ai_result.requested_selftapes = list(selftapes_list) + [talent_snapshot]
@@ -666,7 +669,8 @@ async def request_ecasting(
         "hair_color": talent.hair_colour,
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
-        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size
+        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
+        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
     }
     
     ai_result.requested_ecastings = list(ecastings_list) + [talent_snapshot]
@@ -674,33 +678,99 @@ async def request_ecasting(
     db.commit()
     return {"status": "success", "message": f"E-casting requested for {talent.name}"}
 
-# ##########---------save a talent-------############ 
+#########--------request for polas--------##########
 
-# @app.post("/save-talent")
-# async def save_talents(
-#     request: SaveTalentRequest, 
-#     db: Session = Depends(get_db)
-#     ):
-#     """ 
-#     save a talent for further view
-#     """
-#     # Check if talent exists
-#     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
-#     if not talent:
-#         raise HTTPException(status_code=404, detail="Talent not found")
+@app.post("/api/jobs/request-polas", dependencies=[Depends(limiter)])
+async def request_polas(
+    request: RequestTalentJobRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Endpoint to request polas for a specific talent in a job."""
+    job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found")
+
+    db.refresh(job)
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job.job_id).first()
+    if not ai_result:
+        ai_result = JobAIResult(job_id=job.job_id, requested_polas=[])
+        db.add(ai_result)
     
-#     saved = SavedTalent(
-#         user_session_id=request.session_id,
-#         user_id=request.user_id,
-#         talent_id=request.talent_id,
-#         saved_at=str(date.today())
-#     )
-#     db.add(saved)
-#     db.commit()
-#     return {
-#             "status": "success", 
-#             "message": f"Talent {talent.name} saved."
-#             }
+    polas_list = ai_result.requested_polas or []
+    
+    if any(t.get('talent_id') == talent.talent_id for t in polas_list):
+        raise HTTPException(status_code=400, detail="talent already added")
+
+    job.polas_count = (job.polas_count or 0) + 1
+
+    talent_snapshot = {
+        "talent_id": talent.talent_id,
+        "job_id": job.job_id,
+        "name": talent.name,
+        "role": talent.role,
+        "gender": talent.gender,
+        "location": talent.location,
+        "country": talent.country,
+        "continent": talent.continent,
+        "is_active": talent.is_active,
+        "agent_id": talent.agent_id,
+        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
+        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)[:1]] if talent.images else [],
+        "eye_color": talent.eye_colour,
+        "hair_type": talent.hair_type,
+        "hair_color": talent.hair_colour,
+        "skin_color": talent.skin_color,
+        "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
+        "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
+        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+    }
+    
+    ai_result.requested_polas = list(polas_list) + [talent_snapshot]
+
+    db.commit()
+    return {"status": "success", "message": f"Polas requested for {talent.name}"}
+
+@app.post("/api/talents/shortlist", dependencies=[Depends(limiter)])
+async def shortlist_talent(
+    request: ShortlistTalentRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Shortlist a talent for a specific job."""
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found")
+
+    job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
+
+    existing_shortlist = db.query(ShortlistedTalent).filter(
+        ShortlistedTalent.user_id == user_id,
+        ShortlistedTalent.talent_id == request.talent_id,
+        ShortlistedTalent.job_id == request.job_id
+    ).first()
+
+    if existing_shortlist:
+        raise HTTPException(status_code=400, detail=f"Talent {talent.name} is already shortlisted for job {request.job_id}.")
+
+    job.shortlisted_count = (job.shortlisted_count or 0) + 1
+
+    new_shortlist = ShortlistedTalent(
+        session_id=request.session_id,
+        user_id=user_id,
+        talent_id=request.talent_id,
+        job_id=request.job_id
+    )
+    db.add(new_shortlist)
+    db.commit()
+    return {"status": "success", "message": f"Talent {talent.name} shortlisted."}
 
 # ########--------View calendar of a member that shows which dates they are available---------#########
 
@@ -721,50 +791,113 @@ async def request_ecasting(
 #         "available_on": talent.available_date
 #     }
 
-
     
-# @app.post("/book-talent")
-# async def book_talent(
-#     request: BookTalentRequest, 
-#     db: Session = Depends(get_db)
-#     ):
-#     """
-#     Book a talent. Automatically saves the talent if not already saved.
-#     """
-#     # To check if talent exists
-#     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
-#     if not talent:
-#         raise HTTPException(status_code=404, detail="Talent not found")
+@app.post("/api/talents/book", dependencies=[Depends(limiter)])
+async def book_talent(
+    request: BookTalentRequest,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Book a talent. Automatically saves the talent if not already saved."""
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found")
 
-#     # To check if already saved
-#     saved = db.query(SavedTalent).filter(
-#         SavedTalent.user_id == request.user_id,
-#         SavedTalent.talent_id == request.talent_id
-#     ).first()
+    job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
 
-#     #if not saved than saves
-#     if not saved:
-#         saved = SavedTalent(
-#             user_session_id=request.session_id or "direct_booking",
-#             user_id=request.user_id,
-#             talent_id=request.talent_id,
-#             saved_at=str(date.today())
-#         )
-#         db.add(saved)
+    # Check if already booked
+    existing_booking = db.query(Booking).filter(
+        Booking.user_id == user_id,
+        Booking.talent_id == request.talent_id,
+        Booking.job_id == request.job_id
+    ).first()
+    if existing_booking:
+        raise HTTPException(status_code=400, detail=f"Talent {talent.name} is already booked for job {request.job_id}.")
 
-#     booking = Booking(     # Create Booking
-#         user_id=request.user_id,
-#         talent_id=request.talent_id,
-#         booking_date=str(datetime.now())
-#     )
-#     db.add(booking) #add booking
-#     db.commit()
+    existing_shortlist = db.query(ShortlistedTalent).filter(
+        ShortlistedTalent.user_id == user_id,
+        ShortlistedTalent.talent_id == request.talent_id,
+        ShortlistedTalent.job_id == request.job_id
+    ).first()
+
+    if not existing_shortlist:
+        db.add(ShortlistedTalent(
+            user_id=user_id, 
+            talent_id=request.talent_id, 
+            session_id=request.session_id,
+            job_id=request.job_id
+        ))
+        job.shortlisted_count = (job.shortlisted_count or 0) + 1
+
+    new_booking = Booking(
+        session_id=request.session_id,
+        user_id=user_id,
+        talent_id=request.talent_id,
+        job_id=request.job_id
+    )
+    db.add(new_booking)
+    db.commit()
+
+    return {"status": "success", "message": f"Talent {talent.name} booked successfully."}
+
+
+@app.get("/api/view-shortlists", response_model=ShortlistSummaryResponse, dependencies=[Depends(limiter)])
+async def get_shortlist(
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns a list of jobs with a preview of shortlisted talents.
+    """
+    total_jobs = db.query(Job).filter(Job.job_created_by_id == user_id).count()
+    queries = db.query(Job).filter(Job.job_created_by_id == user_id, Job.shortlisted_count > 0)
     
-#     return {
-#         "status": "success",
-#         "message": f"Talent {talent.name} booked successfully."
-#     }
-
+    shortlists_data = []
+    now = datetime.now(timezone.utc)
+    
+    for job in queries:
+        shortlisted_records = db.query(ShortlistedTalent)\
+            .filter(ShortlistedTalent.job_id == job.job_id, ShortlistedTalent.user_id == user_id)\
+            .order_by(ShortlistedTalent.created_at.desc())\
+            .limit(5).all()
+        
+        preview_talents = []
+        for record in shortlisted_records:
+            talent = record.talent
+            img_url = None
+            if talent.images:
+                first_img = sorted(talent.images, key=lambda x: x.image_id)[0]
+                img_url = f"/media/{first_img.image}"
+            
+            preview_talents.append(TalentPreview(
+                talent_id=str(talent.talent_id),
+                profile_image_url=img_url
+            ))
+        
+        elapsed_hours = (now - job.created_at).total_seconds() / 3600
+        remaining_hours = max(0, int(72 - elapsed_hours))
+        
+        shortlists_data.append(ShortlistSummaryItem(
+            job_id=str(job.job_id),
+            job_title=job.title,
+            talent_count=job.shortlisted_count,
+            time_remaining_hours=remaining_hours,
+            preview_talents=preview_talents,
+            extra_talent_count=max(0, job.shortlisted_count - len(preview_talents))
+        ))
+        
+    return ShortlistSummaryResponse(
+        shortlists=shortlists_data,
+        pagination=SummaryPagination(
+            page=1,
+            limit=10,
+            total=total_jobs
+        )
+    )
+        
+        
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8008, reload= True)

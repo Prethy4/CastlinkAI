@@ -117,14 +117,21 @@ def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
     except Exception as e:
         return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.")
 
-def generate_ask_response(missing_fields: List[str]) -> str:
-    """Generates a polite question to ask for missing mandatory fields."""
+def generate_ask_response(missing_fields: List[str], user_input: str) -> str:
+    """Generates a polite response to a greeting or asks for missing mandatory fields."""
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0.6, api_key=OPENAI_API_KEY)
+    
     prompt = f"""
-    You are a Casting Assistant helping a user find talent. You need to collect the following missing criteria for the talent search: {', '.join(missing_fields)}.
-    Politely ask the user for these criteria about the talent they are looking for.
-    For example, if you need 'gender', ask 'What gender are you looking for in the talent?'.
-    Keep the question short, professional, and focused on the talent search.
+    You are a Casting Assistant helping a user find talent. 
+    User message: "{user_input}"
+    Missing criteria: {', '.join(missing_fields)}.
+
+    1. If the user message is a greeting (e.g. 'Hi', 'Hello', 'Help me find talent') or if the search is just beginning, your response MUST start with:
+    "Hi. To find talents, you need to provide mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) and add additional features (like hair color, height etc.) to refine the search."
+    
+    2. Then, politely ask for the first missing field: {missing_fields[0]}.
+    
+    Keep the response professional, concise, and focused on the talent search.
     """
     return llm.invoke(prompt).content
 
@@ -216,7 +223,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             result_list.append({
                 "talent_id": t.talent_id,
                 "agent_id": t.agent_id,
-                "agent_name": t.agent.full_name if t.agent else "Unknown",
+                "agent_name": t.agent.full_name,
                 "name": t.name,
                 "role": t.role,
                 "date_of_birth": t.date_of_birth,
@@ -235,7 +242,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "continent": t.continent,
                 "country": t.country,
                 "is_active": t.is_active,
-                # "available_date": t.available_date,
+                "available_dates": [ad.available_date for ad in t.available_dates if ad.is_active],
                 "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)[:1]] if t.images else [],
             })
         
@@ -255,7 +262,8 @@ def reasoner_node(state: AgentState):
     Your task now is to refine the search.
 
     Rules:
-    1. Ask for missing mandatory fields first.
+    1. If the user greets, reply with: "Hi. To find talents, you need to provide mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) and add additional features to refine search." 
+    2. Ask for missing mandatory fields first.
     2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
     3. If the user provides appearance details, call 'generate_casting'.
     4. If the user declines to provide more details, call 'generate_casting'.

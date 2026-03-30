@@ -31,7 +31,7 @@ class TalentResponse(BaseModel):
     location: Optional[str] = None
     continent: Optional[str] = None
     country: Optional[str] = None
-    #available_date: Optional[date] = None add again
+    available_dates: List[date] = []
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -58,13 +58,15 @@ class RequestTalentJobRequest(BaseModel):
 class GenerateCastingRequest(BaseModel):
     session_id: str
 
-class SaveTalentRequest(BaseModel):
-    session_id: str
+class ShortlistTalentRequest(BaseModel):
+    job_id: int
     talent_id: int
+    session_id: Optional[str] = None
 
 class BookTalentRequest(BaseModel):
-    session_id: Optional[str] = None
+    job_id: int
     talent_id: int
+    session_id: Optional[str] = None
 
 class ChatMessageResponse(BaseModel):
     sender: str
@@ -88,6 +90,7 @@ class JobResponse(BaseModel):
     shortlisted_count: int
     selftapes_count: int
     ecastings_count: int
+    polas_count: int
     created_at: datetime
 
     class Config:
@@ -107,10 +110,12 @@ class JobResultResponse(BaseModel):
     shortlisted_count: int
     selftapes_count: int
     ecastings_count: int
+    polas_count: int
     shoot_date: Optional[str] = None
     suggested_talents: List[TalentResponse] = []
     requested_selftapes: List[TalentResponse] = []
     requested_ecastings: List[TalentResponse] = []
+    requested_polas: List[TalentResponse] = []
     messages: List[ChatMessageResponse] = []
 
     class Config:
@@ -183,3 +188,24 @@ class ChatSessionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class TalentPreview(BaseModel):
+    talent_id: str
+    profile_image_url: Optional[str] = None
+
+class ShortlistSummaryItem(BaseModel):
+    job_id: str
+    job_title: str
+    talent_count: int
+    time_remaining_hours: int
+    preview_talents: List[TalentPreview]
+    extra_talent_count: int
+
+class SummaryPagination(BaseModel):
+    page: int
+    limit: int
+    total: int
+
+class ShortlistSummaryResponse(BaseModel):
+    shortlists: List[ShortlistSummaryItem]
+    pagination: SummaryPagination
