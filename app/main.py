@@ -798,7 +798,7 @@ async def book_talent(
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Book a talent. Automatically saves the talent if not already saved."""
+    """Book a talent. Saves the talent if not already saved."""
     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found")
