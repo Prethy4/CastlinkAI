@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint, inspect, text
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship 
 from sqlalchemy.sql import func
 from config import DATABASE_URL
@@ -98,6 +98,10 @@ class ChatSession(Base):
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
     draft = relationship("Draft", back_populates="session", uselist=False, cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="session", cascade="all, delete-orphan")
+
+    @property
+    def saved_filters(self):
+        return self.draft.saved_filters if self.draft else {}
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"

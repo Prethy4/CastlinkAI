@@ -5,7 +5,7 @@ load_dotenv(override=True)
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from langchain_core.messages import HumanMessage, AIMessage
 from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking
 from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination
@@ -214,7 +214,7 @@ async def send_message(
         db.add(ai_msg)
         db.commit()
 
-        # --- Generate Job Flow ---
+        # --- Generate Job Flow --- #
         if generate_job:
             current_filters = draft.saved_filters or {}
 
@@ -321,8 +321,12 @@ async def get_sessions(
     db: Session = Depends(get_db)
     ):
     """Get chat session of an user"""
-    
-    sessions = db.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+
+    sessions = db.query(ChatSession).options(
+        joinedload(ChatSession.messages),
+        joinedload(ChatSession.draft)
+    ).filter(ChatSession.user_id == user_id).all()
+
     if not sessions:
         raise HTTPException(status_code=404, detail="User not found")
     return sessions
@@ -336,8 +340,12 @@ async def get_session_details(
     db: Session = Depends(get_db)
     ):
     """Get chat session by session id"""
-    
-    session = db.query(ChatSession).filter(ChatSession.session_id == session_id, ChatSession.user_id == user_id).first()
+
+    session = db.query(ChatSession).options(
+        joinedload(ChatSession.messages),
+        joinedload(ChatSession.draft)
+    ).filter(ChatSession.session_id == session_id, ChatSession.user_id == user_id).first()
+
     if not session:
         raise HTTPException(status_code=404, detail="Chat not found")
     return session

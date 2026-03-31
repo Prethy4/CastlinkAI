@@ -185,6 +185,7 @@ class ChatSessionResponse(BaseModel):
     user_id: int
     created_at: datetime
     messages: List[ChatMessageResponse] = []
+    saved_filters: Dict[str, Any] = {}
 
     class Config:
         from_attributes = True
