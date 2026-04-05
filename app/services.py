@@ -41,7 +41,6 @@ class RateLimiter:
 class AgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages]
     filters: Dict[str, Any] = {}
-    found_talents: List[Dict] = []
 
 class GeneratedJobInfo(BaseModel):
     title: str = Field(..., description="A concise and catchy title for the casting job.")
@@ -66,6 +65,7 @@ class ExtractedFilters(BaseModel):
     budget: Optional[str] = Field(None, description="Budget")
     job_type: Optional[str] = Field(None, description="The category of the production (e.g. film, TV, commercial, theater, voiceover, modeling).")
     role: Optional[str] = Field(None, description="The specific role for the talent (e.g. model, actor, singer).")
+    limit: Optional[int] = Field(None, description="The specific number of talent results requested by the user.")
 
 def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
     """Extracts casting filters from user input using a lightweight LLM call."""
@@ -79,6 +79,7 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     
     The mandatory fields are: location, shoot_date, budget, job_type, gender, skin_color.
     If the user input seems to be answering a question about 'job_type' (e.g. 'modeling', 'commercial'), ensure it is mapped to the 'job_type' field.
+    If the user mentions a specific number of talents they want to see (e.g., 'show me 5 talents' or 'find 3 models'), extract this into the 'limit' field.
 
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
     """
@@ -114,7 +115,7 @@ def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
     try:
         result = structured_llm.invoke(prompt)
         return result
-    except Exception as e:
+    except Exception:
         return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.")
 
 def generate_ask_response(missing_fields: List[str], user_input: str) -> str:
@@ -140,9 +141,10 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
                      shoot_date: List[str] = None, hair_type: str = None, role: str = None,
                      height: str = None, bust: str = None, waist: str = None, hips: str = None, budget: str = None, job_type: str = None,
-                     shoe_size: str = None, dress_size: str = None):
+                     shoe_size: str = None, dress_size: str = None, limit: int = 100):
     """
     Search for talent. Returns ranked recommendations based on matched criteria.
+    'limit' is the maximum number of results to return (defaults to 100).
     """
     db = SessionLocal()
     try:
@@ -153,70 +155,57 @@ def generate_casting(location: str = None, continent: str = None, country: str =
         for t in talents:
             score = 0
             
-            def matches(value, target):
-                if not value or not target:
-                    return False
-                return str(value).lower() in str(target).lower()
+            def matches(val, target):
+                return str(val).lower() in str(target).lower() if val and target else False
 
-            if location:
-                if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
-                    score += 1
-            if role and matches(job_type, t.role): score += 1
-            if continent and matches(continent, t.continent): score += 1
-            if country and matches(country, t.country): score += 1
-            
             if gender:
                 g_input = gender.lower()
                 if g_input == "man": g_input = "male"
                 elif g_input == "woman": g_input = "female"
-                elif g_input in ["non-binary", "non binary"]: g_input = "nonbinary"
-                elif g_input in ["non-binary", "non binary"]: g_input = "transgender"
+                elif "non" in g_input: g_input = "nonbinary"
 
                 if not t.gender or t.gender.lower() != g_input:
                     continue
-                score += 1
-            
-            if hair_color and matches(hair_color, t.hair_colour): score += 1
-            if hair_type and matches(hair_type, t.hair_type): score += 1
-            if eye_color and matches(eye_color, t.eye_colour): score += 1
-            if skin_color and matches(skin_color, t.skin_color): score += 1
-
-            try:
-                if height and t.height is not None and float(t.height) == float(height): score += 1
-            except (ValueError, TypeError): pass
-            try:
-                if bust and t.bust is not None and float(t.bust) == float(bust): score += 1
-            except (ValueError, TypeError): pass
-            try:
-                if waist and t.waist is not None and float(t.waist) == float(waist): score += 1
-            except (ValueError, TypeError): pass
-            try:
-                if hips and t.hips is not None and float(t.hips) == float(hips): score += 1
-            except (ValueError, TypeError): pass
-            try:
-                if shoe_size and t.shoe_size is not None and int(t.shoe_size) == int(shoe_size): score += 1
-            except (ValueError, TypeError): pass
-            try:
-                if dress_size and t.dress_size is not None and int(t.dress_size) == int(dress_size): score += 1
-            except (ValueError, TypeError): pass
+                score += 1000  # Base score for passing mandatory filter
 
             if shoot_date and t.available_dates:
                 try:
-                    user_dates = set()
-                    for d in shoot_date:
-                        if d: user_dates.add(datetime.strptime(d.strip(), '%Y-%m-%d').date())
-                    
+                    user_dates = {datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d.strip()}
                     talent_dates = {ad.available_date for ad in t.available_dates if ad.is_active}
                     if not user_dates.isdisjoint(talent_dates):
-                        score += 1
-                except (ValueError, TypeError): pass
+                        score += 500  
+                except (ValueError, TypeError):
+                    pass
+
+            if location:
+                if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
+                    score += 100
+            if continent and matches(continent, t.continent): score += 50
+            if country and matches(country, t.country): score += 50
+            
+            if role and matches(role, t.role): score += 80
+
+            if hair_color and matches(hair_color, t.hair_colour): score += 10
+            if hair_type and matches(hair_type, t.hair_type): score += 10
+            if eye_color and matches(eye_color, t.eye_colour): score += 10
+            if skin_color and matches(skin_color, t.skin_color): score += 10
+
+            try:
+                if height and t.height is not None and float(t.height) == float(height): score += 10
+                if bust and t.bust is not None and float(t.bust) == float(bust): score += 10
+                if waist and t.waist is not None and float(t.waist) == float(waist): score += 10
+                if hips and t.hips is not None and float(t.hips) == float(hips): score += 10
+                if shoe_size and t.shoe_size is not None and int(t.shoe_size) == int(shoe_size): score += 10
+                if dress_size and t.dress_size is not None and int(t.dress_size) == int(dress_size): score += 10
+            except (ValueError, TypeError):
+                pass
             
             if score > 0:
                 scored_talents.append((score, t))
 
         scored_talents.sort(key=lambda x: x[0], reverse=True)
-        top_results = [item[1] for item in scored_talents[:100]]
-        total_results = len(scored_talents)
+        top_results = [item[1] for item in scored_talents[:limit]]
+        total_results = len(top_results)
         
         result_list = []
         for t in top_results:
@@ -264,13 +253,13 @@ def reasoner_node(state: AgentState):
     Rules:
     1. If the user greets, reply with: "Hi. To find talents, you need to provide mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) and add additional features to refine search." 
     2. Ask for missing mandatory fields first.
-    2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
-    3. If the user provides appearance details, call 'generate_casting'.
-    4. If the user declines to provide more details, call 'generate_casting'.
-    5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
+    3. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
+    4. If the user provides appearance details, call 'generate_casting'.
+    5. If the user declines to provide more details, call 'generate_casting'.
+    6. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
 
     Be concise."""
-    
+
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY, max_retries=3)
     tools = [generate_casting]
     llm_with_tools = llm.bind_tools(tools)

@@ -56,6 +56,7 @@ async def send_message(
         shoot_date = request.shoot_date
         budget = request.budget
         job_type = request.job_type
+        limit = request.limit
         save_as_draft = request.save_as_draft
         generate_job = request.generate_job
 
@@ -94,6 +95,7 @@ async def send_message(
         if location: filters['location'] = location
         if budget: filters['budget'] = budget
         if job_type: filters['job_type'] = job_type
+        if limit: filters['limit'] = limit
         if shoot_date:
             cleaned_dates = []
             for d in shoot_date:
@@ -164,6 +166,8 @@ async def send_message(
         if missing_keys:
             response_content = generate_ask_response(missing_keys, message)
             final_state = {"filters": filters, "messages": [AIMessage(content=response_content)]}
+            current_filters = filters # Use the updated filters
+            current_phase = "COLLECT_MANDATORY"
         else:
             inputs = {"messages": msgs, "filters": filters}
             final_state = app_graph.invoke(inputs, config={"recursion_limit": 20})
@@ -172,7 +176,7 @@ async def send_message(
         
         # --- Persist Session State (Draft) --- #
         current_filters = final_state.get('filters', {})
-        
+
         suggested_talents_list = []
         total_results = 0
         search_performed = False
@@ -195,7 +199,6 @@ async def send_message(
 
         current_phase = "READY_TO_GENERATE" if all(k in current_filters for k in MANDATORY_FIELDS) else "COLLECT_MANDATORY"
 
-        draft.phase = current_phase
         draft.saved_filters = json.loads(json.dumps(current_filters, cls=CustomEncoder))
 
         draft.title = current_filters.get("title")
@@ -277,14 +280,14 @@ async def send_message(
             return JSONResponse(status_code=200, content={"detail": f"Job '{new_job.title}' created successfully.", "session_id": chat_session.session_id})
 
         final_talents = []
-        total_results = 0
+        total_results_for_response = 0
         for msg in final_state['messages']:
             if hasattr(msg, 'name') and msg.name == 'generate_casting':
                 if hasattr(msg, 'artifact') and msg.artifact:
                     talent_data = msg.artifact.get('talents', [])
                     for t in talent_data:
                         final_talents.append(TalentResponse(**t))
-                    total_results = msg.artifact.get('total_results', len(final_talents))
+                    total_results_for_response = msg.artifact.get('total_results', len(final_talents))
                     break
 
         response_payload = {
@@ -294,12 +297,12 @@ async def send_message(
         }
 
         if total_results > 0:
-            per_page = 2
+            per_page = filters.get('limit') or 100
             total_pages = math.ceil(total_results / per_page)
-            has_next = total_pages > 1  
+            has_next = total_pages > 1
             response_payload["pagination"] = PaginationResponse(
                 total_results=total_results,
-                page=total_pages,
+                page=1,
                 per_page=per_page,
                 has_next=has_next
             )
@@ -542,7 +545,7 @@ async def view_ai_result(
     """
     job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=401, detail="User unauthorised or Job not found")
 
     db.refresh(job)
     ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job.job_id).first()

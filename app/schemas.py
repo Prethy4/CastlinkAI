@@ -40,6 +40,7 @@ class ChatRequest(BaseModel):
     shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
     budget: Optional[str] = Field(None, alias="budget_range")
     job_type: Optional[str] = None
+    limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
     save_as_draft: bool = False
