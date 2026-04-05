@@ -251,12 +251,11 @@ def reasoner_node(state: AgentState):
     Your task now is to refine the search.
 
     Rules:
-    1. If the user greets, reply with: "Hi. To find talents, you need to provide mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) and add additional features to refine search." 
-    2. Ask for missing mandatory fields first.
-    3. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
-    4. If the user provides appearance details, call 'generate_casting'.
-    5. If the user declines to provide more details, call 'generate_casting'.
-    6. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
+    1. Ask for missing mandatory fields first.
+    2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
+    3. If the user provides appearance details, call 'generate_casting'.
+    4. If the user declines to provide more details, call 'generate_casting'.
+    5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
 
     Be concise."""
 
