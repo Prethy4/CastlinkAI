@@ -32,6 +32,9 @@ class TalentResponse(BaseModel):
     continent: Optional[str] = None
     country: Optional[str] = None
     available_dates: List[date] = []
+    status: Optional[str] = None
+    tapes: List[str] = []
+    polas: List[str] = []
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -68,6 +71,39 @@ class BookTalentRequest(BaseModel):
     job_id: int
     talent_id: int
     session_id: Optional[str] = None
+
+class SelfTapeStatusAction(BaseModel):
+    job_id: int
+    talent_id: int
+    status: str  # 'accepted' or 'rejected'
+
+class PolaStatusAction(BaseModel):
+    job_id: int
+    talent_id: int
+    status: str  # 'accepted' or 'rejected'
+
+class PolaUploadPageResponse(BaseModel):
+    talent_name: str
+    talent_role: Optional[str] = None
+    job_title: str
+    job_budget: Optional[str] = None
+    timeline: Optional[str] = None # Shoot dates
+    status: str
+    existing_images: List[str] = []
+
+class SelfTapeUploadRequest(BaseModel):
+    job_id: int
+    talent_id: int
+    tape_urls: List[str]
+
+class SelfTapeUploadPageResponse(BaseModel):
+    talent_name: str
+    talent_role: Optional[str] = None
+    job_title: str
+    job_budget: Optional[str] = None
+    timeline: Optional[str] = None # Shoot dates
+    status: str
+    existing_tapes: List[str] = []
 
 class ChatMessageResponse(BaseModel):
     sender: str

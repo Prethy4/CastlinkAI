@@ -1,5 +1,5 @@
 from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship 
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from config import DATABASE_URL
 
@@ -196,6 +196,50 @@ class JobAIResult(Base):
     requested_ecastings = Column(JSON, nullable=True)
     requested_polas = Column(JSON, nullable=True)
     shoot_date = Column(String, nullable=True)
+
+class SelfTapeRequest(Base):
+    __tablename__ = "jobs_selftape_requests"
+    
+    request_id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
+    status = Column(String(50), nullable=False, default="requested") # 'requested', 'accepted', 'rejected', 'responded'
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tapes = relationship("SelfTapeLink", back_populates="request", cascade="all, delete-orphan")
+
+class SelfTapeLink(Base):
+    __tablename__ = "jobs_selftape_links"
+    
+    link_id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(Integer, ForeignKey("jobs_selftape_requests.request_id"), nullable=False)
+    tape_url = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    request = relationship("SelfTapeRequest", back_populates="tapes")
+
+class PolaRequest(Base):
+    __tablename__ = "jobs_pola_requests"
+    
+    request_id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
+    status = Column(String(50), nullable=False, default="requested") # 'requested', 'accepted', 'rejected', 'responded'
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    images = relationship("PolaLink", back_populates="request", cascade="all, delete-orphan")
+
+class PolaLink(Base):
+    __tablename__ = "jobs_pola_links"
+    
+    link_id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(Integer, ForeignKey("jobs_pola_requests.request_id"), nullable=False)
+    pola_url = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    request = relationship("PolaRequest", back_populates="images")
 
 # Setup Engine
 if "sqlite" in DATABASE_URL:

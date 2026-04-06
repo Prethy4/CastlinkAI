@@ -139,8 +139,8 @@ def generate_ask_response(missing_fields: List[str], user_input: str) -> str:
 @tool
 def generate_casting(location: str = None, continent: str = None, country: str = None,
                      gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
-                     shoot_date: List[str] = None, hair_type: str = None, role: str = None,
-                     height: str = None, bust: str = None, waist: str = None, hips: str = None, budget: str = None, job_type: str = None,
+                     shoot_date: List[str] = None, role: str = None,
+                     height: str = None, bust: str = None, waist: str = None, hips: str = None, 
                      shoe_size: str = None, dress_size: str = None, limit: int = 100):
     """
     Search for talent. Returns ranked recommendations based on matched criteria.
@@ -179,16 +179,21 @@ def generate_casting(location: str = None, continent: str = None, country: str =
 
             if location:
                 if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
-                    score += 100
+                    score += 80
             if continent and matches(continent, t.continent): score += 50
             if country and matches(country, t.country): score += 50
             
             if role and matches(role, t.role): score += 80
 
-            if hair_color and matches(hair_color, t.hair_colour): score += 10
-            if hair_type and matches(hair_type, t.hair_type): score += 10
-            if eye_color and matches(eye_color, t.eye_colour): score += 10
-            if skin_color and matches(skin_color, t.skin_color): score += 10
+            if hair_color:
+                if not matches(hair_color, t.hair_colour): continue
+                score += 50
+            if eye_color:
+                if not matches(eye_color, t.eye_colour): continue
+                score += 50
+            if skin_color:
+                if not matches(skin_color, t.skin_color): continue
+                score += 50
 
             try:
                 if height and t.height is not None and float(t.height) == float(height): score += 10

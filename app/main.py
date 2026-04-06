@@ -1,14 +1,20 @@
 import math
+import os
+import shutil
+import uuid
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, File, UploadFile, Form
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
-from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking
-from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination
+from database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink
+from schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse
 from services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from typing import List, Optional
 import json
@@ -27,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount the media directory to serve static files (videos and images)
+app.mount("/media", StaticFiles(directory="media"), name="media")
 
 limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please try again later or contact the support.")
 
@@ -562,13 +571,42 @@ async def view_ai_result(
             ChatMessage.timestamp <= job.created_at
         ).order_by(ChatMessage.message_id.asc()).all()
 
+    # Fetch relational data for Self-Tapes
+    st_data = db.query(SelfTapeRequest).options(joinedload(SelfTapeRequest.tapes)).filter(SelfTapeRequest.job_id == job_id).all()
+    st_status_map = {r.talent_id: r.status for r in st_data}
+    st_links_map = {r.talent_id: [t.tape_url for t in r.tapes] for r in st_data}
+
+    # Fetch relational data for Polas
+    pola_data = db.query(PolaRequest).options(joinedload(PolaRequest.images)).filter(PolaRequest.job_id == job_id).all()
+    pola_status_map = {r.talent_id: r.status for r in pola_data}
+    pola_links_map = {r.talent_id: [img.pola_url for img in r.images] for r in pola_data}
+
+    def prepare_talent_list(raw_list, list_type):
+        processed = []
+        for t in (raw_list or []):
+            talent_id = t.get('talent_id')
+            
+            if list_type == 'selftape':
+                if talent_id in st_status_map: t['status'] = st_status_map[talent_id]
+                if talent_id in st_links_map: t['tapes'] = st_links_map[talent_id]
+                else: t['tapes'] = t.get('tapes', [])
+                
+            elif list_type == 'polas':
+                if talent_id in pola_status_map: t['status'] = pola_status_map[talent_id]
+                if talent_id in pola_links_map: t['polas'] = pola_links_map[talent_id]
+                else: t['polas'] = t.get('polas', [])
+            
+            # For e-castings, snapshots are returned as-is
+            processed.append(TalentResponse(**t))
+        return processed
+
     response = JobResultResponse(
         **job.__dict__,
         shoot_date=shoot_date,
         suggested_talents=[TalentResponse(**t) for t in (suggested_talents or [])],
-        requested_selftapes=[TalentResponse(**t) for t in (requested_selftapes_raw or [])],
+        requested_selftapes=prepare_talent_list(requested_selftapes_raw, 'selftape'),
         requested_ecastings=[TalentResponse(**t) for t in (requested_ecastings_raw or [])],
-        requested_polas=[TalentResponse(**t) for t in (requested_polas_raw or [])],
+        requested_polas=prepare_talent_list(requested_polas_raw, 'polas'),
         messages=[ChatMessageResponse.from_orm(m) for m in messages]
     )
     return response
@@ -623,8 +661,18 @@ async def request_selftape(
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
         "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active],
+        "status": "requested",
+        "tapes": []
     }
+
+    # Create the relational record with the dedicated status column
+    new_st_request = SelfTapeRequest(
+        job_id=job.job_id,
+        talent_id=talent.talent_id,
+        status="requested"
+    )
+    db.add(new_st_request)
     
     ai_result.requested_selftapes = list(selftapes_list) + [talent_snapshot]
  
@@ -907,8 +955,316 @@ async def get_shortlist(
             total=total_jobs
         )
     )
+
+@app.post("/api/jobs/selftape/action", dependencies=[Depends(limiter)])
+async def update_selftape_status(
+    request: SelfTapeStatusAction,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept or Reject a self-tape request."""
+    if request.status not in ["accepted", "rejected"]:
+        raise HTTPException(status_code=400, detail="Invalid status. Use 'accepted' or 'rejected'.")
+
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    job = db.query(Job).filter(Job.job_id == request.job_id).first()
+
+    if not talent or not job:
+        raise HTTPException(status_code=404, detail="Talent or Job not found.")
+
+    if user_id not in [talent.talent_id, talent.agent_id, job.job_created_by_id]:
+        raise HTTPException(status_code=403, detail="Unauthorized to perform this action for this talent.")
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == request.job_id).first()
+    if not ai_result or not ai_result.requested_selftapes:
+        raise HTTPException(status_code=404, detail="Job AI results or snapshots not found.")
+
+    selftapes = ai_result.requested_selftapes
+    talent_snapshot = next((t for t in selftapes if t.get('talent_id') == request.talent_id), None)
+    if not talent_snapshot:
+        raise HTTPException(status_code=404, detail="Self-tape request not found in job snapshot.")
+
+    st_request = db.query(SelfTapeRequest).filter(
+        SelfTapeRequest.job_id == request.job_id,
+        SelfTapeRequest.talent_id == request.talent_id
+    ).first()
+
+    if not st_request:
+        st_request = SelfTapeRequest(job_id=request.job_id, talent_id=request.talent_id, status="requested")
+        db.add(st_request)
+        db.flush()
+
+    if st_request.status == request.status:
+        raise HTTPException(status_code=400, detail=f"This request is already {request.status}.")
+
+    st_request.status = request.status
+    talent_snapshot['status'] = request.status
+    flag_modified(ai_result, "requested_selftapes")
+    
+    db.commit()
+    return {"status": "success", "message": f"Self-tape {request.status}."}
+
+# @app.get("/api/jobs/selftape/details", response_model=SelfTapeUploadPageResponse, dependencies=[Depends(limiter)])
+# async def get_selftape_upload_details(
+#     job_id: int,
+#     talent_id: int,
+#     user_id: int = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     """Fetch details for the self-tape response/upload page."""
+#     talent = db.query(Talent).filter(Talent.talent_id == talent_id).first()
+#     job = db.query(Job).filter(Job.job_id == job_id).first()
+#     if not talent or not job:
+#         raise HTTPException(status_code=404, detail="Talent or Job not found.")
+
+#     if user_id not in [talent.talent_id, talent.agent_id, job.job_created_by_id]:
+#         raise HTTPException(status_code=403, detail="Unauthorized to access these details.")
+
+#     st_request = db.query(SelfTapeRequest).options(joinedload(SelfTapeRequest.tapes)).filter(
+#         SelfTapeRequest.job_id == job_id,
+#         SelfTapeRequest.talent_id == talent_id
+#     ).first()
+
+#     ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job_id).first()
+#     if not st_request or not ai_result:
+#         raise HTTPException(status_code=404, detail="Job or AI results not found.")
+
+#     return SelfTapeUploadPageResponse(
+#         talent_name=talent.name,
+#         talent_role=talent.role,
+#         job_title=job.title,
+#         job_budget=job.budget,
+#         timeline=ai_result.shoot_date,
+#         status=st_request.status,
+#         existing_tapes=[t.tape_url for t in st_request.tapes]
+#     )
+
+@app.post("/api/jobs/selftape/upload", dependencies=[Depends(limiter)])
+async def upload_selftape_videos(
+    job_id: int = Form(...),
+    talent_id: int = Form(...),
+    files: Optional[List[UploadFile]] = File(None),
+    tape_urls: Optional[List[str]] = Form(None),
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload tapes for a self-tape and mark status as 'responded'."""
+    talent = db.query(Talent).filter(Talent.talent_id == talent_id).first()
+    job = db.query(Job).filter(Job.job_id == job_id).first()
+    if not talent or not job:
+        raise HTTPException(status_code=404, detail="Talent or Job not found.")
+
+    if user_id not in [talent.talent_id, talent.agent_id, job.job_created_by_id]:
+        raise HTTPException(status_code=403, detail="Unauthorized to upload tapes for this talent.")
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job_id).first()
+    if not ai_result:
+        raise HTTPException(status_code=404, detail="Job AI results not found.")
+
+    selftapes = ai_result.requested_selftapes or []
+    talent_snapshot = next((t for t in selftapes if t.get('talent_id') == talent_id), None)
+    if not talent_snapshot:
+        raise HTTPException(status_code=404, detail="Self-tape request not found in job snapshot.")
+
+    st_request = db.query(SelfTapeRequest).options(joinedload(SelfTapeRequest.tapes)).filter(
+        SelfTapeRequest.job_id == job_id,
+        SelfTapeRequest.talent_id == talent_id
+    ).first()
+
+    if not st_request:
+        st_request = SelfTapeRequest(job_id=job_id, talent_id=talent_id, status="requested")
+        db.add(st_request)
+        db.flush()
+
+    if st_request.status == "responded":
+        raise HTTPException(status_code=400, detail="You have already responded to this request.")
+
+    st_request.status = 'responded'
+    talent_snapshot['status'] = 'responded'
+
+    upload_dir = "media/selftapes"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    uploaded_file_urls = []
+    if files:
+        for file in files:
+            file_ext = os.path.splitext(file.filename)[1]
+            unique_filename = f"{uuid.uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            uploaded_file_urls.append(f"/media/selftapes/{unique_filename}")
+
+    processed_external_urls = []
+    if tape_urls:
+        for item in tape_urls:
+            if not item: 
+                continue
+       
+            if isinstance(item, str) and item.strip().startswith("[") and item.strip().endswith("]"):
+                try:
+                    parsed = json.loads(item.strip())
+                    if isinstance(parsed, list):
+                        processed_external_urls.extend([str(x) for x in parsed if x])
+                        continue 
+                except (json.JSONDecodeError, TypeError):
+                    pass # Not a valid JSON list, proceed to next check
+
+            if isinstance(item, str) and "," in item:
+                split_urls = [url.strip() for url in item.split(',') if url.strip()]
+                processed_external_urls.extend(split_urls)
+            else:
+                processed_external_urls.append(item.strip())
+
+    existing_json_tapes = list(talent_snapshot.get('tapes') or [])
+    
+    all_new_urls = uploaded_file_urls + processed_external_urls
+    
+    if not all_new_urls:
+        raise HTTPException(status_code=400, detail="No files or video URLs provided.")
+
+    for url in all_new_urls:
+        if not any(link.tape_url == url for link in st_request.tapes):
+            new_link = SelfTapeLink(tape_url=url)
+            st_request.tapes.append(new_link)
         
-        
+        if url not in existing_json_tapes:
+            existing_json_tapes.append(url)
+    
+    talent_snapshot['tapes'] = existing_json_tapes
+    ai_result.requested_selftapes = selftapes  
+    flag_modified(ai_result, "requested_selftapes")
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": "Self-tapes uploaded and status updated to responded.",
+        "uploaded_urls": all_new_urls
+    }
+
+@app.post("/api/jobs/polas/action", dependencies=[Depends(limiter)])
+async def update_pola_status(
+    request: PolaStatusAction,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Accept or Reject a polas request."""
+    if request.status not in ["accepted", "rejected"]:
+        raise HTTPException(status_code=400, detail="Invalid status. Use 'accepted' or 'rejected'.")
+
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    job = db.query(Job).filter(Job.job_id == request.job_id).first()
+
+    if not talent or not job:
+        raise HTTPException(status_code=404, detail="Talent or Job not found.")
+
+    if user_id not in [talent.talent_id, talent.agent_id, job.job_created_by_id]:
+        raise HTTPException(status_code=403, detail="Unauthorized to perform this action.")
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == request.job_id).first()
+    if not ai_result or not ai_result.requested_polas:
+        raise HTTPException(status_code=404, detail="Job AI results or snapshots not found.")
+
+    polas = ai_result.requested_polas
+    talent_snapshot = next((t for t in polas if t.get('talent_id') == request.talent_id), None)
+    if not talent_snapshot:
+        raise HTTPException(status_code=404, detail="Pola request not found in job snapshot.")
+
+    st_request = db.query(PolaRequest).filter(
+        PolaRequest.job_id == request.job_id,
+        PolaRequest.talent_id == request.talent_id
+    ).first()
+
+    if not st_request:
+        st_request = PolaRequest(job_id=request.job_id, talent_id=request.talent_id, status="requested")
+        db.add(st_request)
+        db.flush()
+
+    st_request.status = request.status
+    talent_snapshot['status'] = request.status
+    flag_modified(ai_result, "requested_polas")
+    
+    db.commit()
+    return {"status": "success", "message": f"Polas {request.status}."}
+
+@app.post("/api/jobs/polas/upload", dependencies=[Depends(limiter)])
+async def upload_pola_images(
+    job_id: int = Form(...),
+    talent_id: int = Form(...),
+    files: Optional[List[UploadFile]] = File(None),
+    image_urls: Optional[List[str]] = Form(None),
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload images for polas and mark status as 'responded'."""
+    talent = db.query(Talent).filter(Talent.talent_id == talent_id).first()
+    job = db.query(Job).filter(Job.job_id == job_id).first()
+    if not talent or not job:
+        raise HTTPException(status_code=404, detail="Talent or Job not found.")
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job_id).first()
+    polas = ai_result.requested_polas or []
+    talent_snapshot = next((t for t in polas if t.get('talent_id') == talent_id), None)
+    if not talent_snapshot:
+        raise HTTPException(status_code=404, detail="Pola request not found in job snapshot.")
+
+    st_request = db.query(PolaRequest).options(joinedload(PolaRequest.images)).filter(
+        PolaRequest.job_id == job_id,
+        PolaRequest.talent_id == talent_id
+    ).first()
+
+    if not st_request:
+        st_request = PolaRequest(job_id=job_id, talent_id=talent_id, status="requested")
+        db.add(st_request)
+        db.flush()
+
+    st_request.status = 'responded'
+    talent_snapshot['status'] = 'responded'
+
+    upload_dir = "media/polas"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    uploaded_file_urls = []
+    if files:
+        for file in files:
+            file_ext = os.path.splitext(file.filename)[1]
+            unique_filename = f"{uuid.uuid4()}{file_ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            uploaded_file_urls.append(f"/media/polas/{unique_filename}")
+
+    processed_external_urls = []
+    if image_urls:
+        for item in image_urls:
+            if not item: continue
+            processed_external_urls.append(item.strip())
+
+    existing_json_tapes = list(talent_snapshot.get('polas') or [])
+    all_new_urls = uploaded_file_urls + processed_external_urls
+    
+    if not all_new_urls:
+        raise HTTPException(status_code=400, detail="No files or image URLs provided.")
+
+    for url in all_new_urls:
+        if not any(link.pola_url == url for link in st_request.images):
+            new_link = PolaLink(pola_url=url)
+            st_request.images.append(new_link)
+        if url not in existing_json_tapes:
+            existing_json_tapes.append(url)
+    
+    talent_snapshot['polas'] = existing_json_tapes
+    ai_result.requested_polas = polas  
+    flag_modified(ai_result, "requested_polas")
+    db.commit()
+    return {
+        "status": "success",
+        "message": "Polas uploaded and status updated to responded.",
+        "uploaded_urls": all_new_urls
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8008, reload= True)
