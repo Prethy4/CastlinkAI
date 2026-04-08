@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from config import DATABASE_URL
@@ -125,6 +125,8 @@ class Draft(Base):
     session_id = Column(String, ForeignKey("chat_sessions.session_id"), unique=True, index=True)
     phase = Column(String)
     saved_filters = Column(JSON)
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
     last_updated = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
     job_type = Column(String, nullable=True)
     location = Column(String, nullable=True)
@@ -250,6 +252,7 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
+    """Initializes the database and applies missing schema updates."""
     Base.metadata.create_all(bind=engine)
 
 def get_db():

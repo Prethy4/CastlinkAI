@@ -43,6 +43,9 @@ class ChatRequest(BaseModel):
     shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
     budget: Optional[str] = Field(None, alias="budget_range")
     job_type: Optional[str] = None
+    gender: Optional[str] = None
+    skin_color: Optional[str] = None
+    role: Optional[str] = None
     limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
@@ -163,6 +166,8 @@ class DraftResponse(BaseModel):
     user_id: int
     session_id: str
     # phase: str
+    title: Optional[str] = None
+    description: Optional[str] = None
     saved_filters: Dict[str, Any] = {}
     last_updated: Optional[datetime] = None
     messages: List[ChatMessageResponse] = []
@@ -181,6 +186,8 @@ class UserDraftResponse(BaseModel):
     draft_id: int
     user_id: int
     session_id: str
+    title: Optional[str] = None
+    description: Optional[str] = None
     saved_filters: DraftsSavedFilters
     updated: str = Field(..., alias="Updated")
     last_updated: Optional[datetime] = None

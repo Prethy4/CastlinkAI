@@ -37,7 +37,7 @@ app.add_middleware(
 # Mount the media directory to serve static files (videos and images)
 app.mount("/media", StaticFiles(directory="media"), name="media")
 
-limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please try again later or contact the support.")
+limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please contact the support.")
 
 MANDATORY_FIELDS = ["location", "shoot_date", "budget", "job_type", "gender", "skin_color"]
 
@@ -65,6 +65,9 @@ async def send_message(
         shoot_date = request.shoot_date
         budget = request.budget
         job_type = request.job_type
+        gender = request.gender
+        skin_color = request.skin_color
+        role = request.role
         limit = request.limit
         save_as_draft = request.save_as_draft
         generate_job = request.generate_job
@@ -104,25 +107,46 @@ async def send_message(
         if location: filters['location'] = location
         if budget: filters['budget'] = budget
         if job_type: filters['job_type'] = job_type
+        if gender: filters['gender'] = gender
+        if skin_color: filters['skin_color'] = skin_color
+        if role: filters['role'] = role
         if limit: filters['limit'] = limit
+        if request.title: filters['title'] = request.title
+        if request.description: filters['description'] = request.description
+
         if shoot_date:
             cleaned_dates = []
             for d in shoot_date:
-                if "," in d:
-                    cleaned_dates.extend([dt.strip() for dt in d.split(",") if dt.strip()])
-                else:
-                    if d.strip():
-                        cleaned_dates.append(d)
+                if isinstance(d, str):
+                    parts = [dt.strip() for dt in d.split(",") if dt.strip()] if "," in d else [d.strip()]
+                    for dt_str in parts:
+                        if dt_str: cleaned_dates.append(dt_str)
+
             if cleaned_dates:
-                filters['shoot_date'] = cleaned_dates
-
-
+                filters['shoot_date'] = list(dict.fromkeys(cleaned_dates))
+        
+        # --- Sync Title & Description from existing Job or Draft ---
+        existing_job = db.query(Job).filter(Job.session_id == chat_session.session_id).order_by(Job.created_at.desc()).first()
+        
         draft = db.query(Draft).filter(Draft.session_id == chat_session.session_id).first()
         if not draft:
             draft = Draft(session_id=chat_session.session_id, user_id=user_id)
             db.add(draft)
-        
-        draft.saved_filters = filters
+            db.flush()
+
+        # Priority: 1. Local Filters (from previous turns) > 2. Existing Job > 3. Existing Draft
+        if not filters.get("title"):
+            filters["title"] = (existing_job.title if existing_job else None) or draft.title or filters.get("title")
+        if not filters.get("description"):
+            filters["description"] = (existing_job.description if existing_job else None) or draft.description or filters.get("description")
+
+        # Update filters with current request values if provided
+        if request.title: filters['title'] = request.title
+        if request.description: filters['description'] = request.description
+
+        # Immediate Sync to Draft object (preserving existing if current is null)
+        draft.title = filters.get("title") or draft.title
+        draft.description = filters.get("description") or draft.description
         draft.location = filters.get("location")
         draft.budget = filters.get("budget")
         draft.job_type = filters.get("job_type")
@@ -131,10 +155,31 @@ async def send_message(
             draft.shoot_date = ", ".join(s_dates)
         else:
             draft.shoot_date = s_dates
+        draft.saved_filters = filters
+        
+        if existing_job and (request.title or request.description):
+            if request.title: existing_job.title = request.title
+            if request.description: existing_job.description = request.description
         db.commit()
 
         extracted_updates = extract_information(message, filters)
         filters.update(extracted_updates)
+
+        # Generate Title and Description for the draft if they don't exist yet
+        if not filters.get("title") or not filters.get("description"):
+            context_contents = [m.content for m in msgs] + [message]
+            generated_info = generate_job_details_from_messages(context_contents)
+            filters["title"] = filters.get("title") or generated_info.title
+            filters["description"] = filters.get("description") or generated_info.description
+            
+            # Sync back to Draft and Job immediately (use 'or' to prevent nulling)
+            draft.title = filters.get("title") or draft.title
+            draft.description = filters.get("description") or draft.description
+            
+            if existing_job:
+                if not existing_job.title: existing_job.title = filters["title"]
+                if not existing_job.description: existing_job.description = filters["description"]
+            db.commit()
 
         # --- Update ChatMessage with specific fields ---
         user_msg.location = filters.get("location")
@@ -157,6 +202,8 @@ async def send_message(
             draft.location = filters.get("location")
             draft.budget = filters.get("budget")
             draft.job_type = filters.get("job_type")
+            draft.title = filters.get("title")
+            draft.description = filters.get("description")
             s_dates_draft = filters.get("shoot_date")
             if isinstance(s_dates_draft, list):
                 draft.shoot_date = ", ".join(s_dates_draft)
@@ -173,18 +220,23 @@ async def send_message(
         response_content = ""
 
         if missing_keys:
-            response_content = generate_ask_response(missing_keys, message)
+            is_initial = len(msgs) <= 1 or any(greet in message.lower() for greet in ["hi", "hello", "hey", "greetings"])
+            response_content = generate_ask_response(missing_keys, message, is_initial)
             final_state = {"filters": filters, "messages": [AIMessage(content=response_content)]}
-            current_filters = filters # Use the updated filters
-            current_phase = "COLLECT_MANDATORY"
         else:
             inputs = {"messages": msgs, "filters": filters}
             final_state = app_graph.invoke(inputs, config={"recursion_limit": 20})
-            last_msg = final_state['messages'][-1]
-            response_content = last_msg.content
+            if final_state.get('messages'):
+                last_msg = final_state['messages'][-1]
+                response_content = last_msg.content or "How else can I help you with your search?"
+            else:
+                response_content = "I'm processing your search. Could you provide more details?"
         
         # --- Persist Session State (Draft) --- #
         current_filters = final_state.get('filters', {})
+        # Ensure title/description are carried forward in the state
+        if "title" not in current_filters and filters.get("title"): current_filters["title"] = filters["title"]
+        if "description" not in current_filters and filters.get("description"): current_filters["description"] = filters["description"]
 
         suggested_talents_list = []
         total_results = 0
@@ -208,10 +260,8 @@ async def send_message(
 
         current_phase = "READY_TO_GENERATE" if all(k in current_filters for k in MANDATORY_FIELDS) else "COLLECT_MANDATORY"
 
-        draft.saved_filters = json.loads(json.dumps(current_filters, cls=CustomEncoder))
-
-        draft.title = current_filters.get("title")
-        draft.description = current_filters.get("description")
+        draft.title = current_filters.get("title") or draft.title
+        draft.description = current_filters.get("description") or draft.description
         draft.location = current_filters.get("location")
         draft.budget = current_filters.get("budget")
         draft.job_type = current_filters.get("job_type")
@@ -220,7 +270,14 @@ async def send_message(
             draft.shoot_date = ", ".join(s_dates)
         else:
             draft.shoot_date = s_dates
+        draft.saved_filters = json.loads(json.dumps(current_filters, cls=CustomEncoder))
         db.commit()
+
+        # --- Stop Job Generation if mandatory info is missing ---
+        if generate_job and missing_keys:
+            missing_str = ", ".join(k.replace('_', ' ').title() for k in missing_keys)
+            response_content = f"I can't generate the final job post yet because I'm missing some required details: {missing_str}. Once you provide these, I can create the job for you."
+            generate_job = False # Override to prevent downstream crash
 
         ai_msg = ChatMessage(session_id=chat_session.session_id, sender="ai", content=response_content)
         db.add(ai_msg)
@@ -235,11 +292,7 @@ async def send_message(
             d_budget = request.budget or current_filters.get("budget")
 
             s_dates_raw = request.shoot_date or current_filters.get("shoot_date")
-            d_shoot_date = None
-            if isinstance(s_dates_raw, list):
-                d_shoot_date = ", ".join(s_dates_raw)
-            else:
-                d_shoot_date = s_dates_raw
+            d_shoot_date = ", ".join(s_dates_raw) if isinstance(s_dates_raw, list) else s_dates_raw
 
             missing_fields = []
             if not d_location: missing_fields.append("location")
@@ -250,8 +303,8 @@ async def send_message(
             if missing_fields:
                 raise HTTPException(status_code=500, detail=f"Missing required fields to generate job: {', '.join(sorted(missing_fields))}")
 
-            job_title = request.title
-            job_description = request.description
+            job_title = request.title or filters.get("title") or draft.title
+            job_description = request.description or filters.get("description") or draft.description
 
             if not job_title or not job_description:
                 initial_messages = db.query(ChatMessage).filter(ChatMessage.session_id == chat_session.session_id).order_by(ChatMessage.message_id.asc()).limit(5).all()
@@ -266,6 +319,14 @@ async def send_message(
 
             if not job_title: job_title = "Casting Call"
             if not job_description: job_description = "Casting for a new project."
+
+            # Sync the draft and filters with the final job title and description
+            draft.title = job_title
+            draft.description = job_description
+            
+            current_filters["title"] = job_title
+            current_filters["description"] = job_description
+            draft.saved_filters = json.loads(json.dumps(current_filters, cls=CustomEncoder))
 
             total_applicants = current_filters.get('total_results', 0)
             suggested_talents_list = current_filters.get('suggested_talents_list') or []
@@ -322,8 +383,8 @@ async def send_message(
 
     except Exception as e:
         db.rollback()
-        # raise HTTPException(status_code=500, detail=str(e))
-        raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
+        raise HTTPException(status_code=500, detail=str(e))
+        #raise HTTPException(status_code=500, detail="Something went wrong. Please try again later or contact the support.")
 
 ###########----------chat session-----------############
 
@@ -385,8 +446,11 @@ async def get_user_drafts(
     db: Session = Depends(get_db)
     ):
     """Get all Draft states"""
-    
-    query = db.query(Draft).filter(Draft.user_id == user_id, Draft.phase == "saved")
+
+    query = db.query(Draft).filter(
+        Draft.user_id == user_id, 
+        Draft.phase.in_(["saved", "generated", None])
+    )
     all_drafts = query.all()
         
     drafts = []
@@ -405,9 +469,6 @@ async def get_user_drafts(
     else:
         drafts = all_drafts
 
-    if not drafts:
-        raise HTTPException(status_code=404, detail="No drafts found")
-        
     response_drafts = []
     for draft in drafts:
         last_user_message = db.query(ChatMessage).filter(
@@ -426,17 +487,18 @@ async def get_user_drafts(
             message=message_content
         )
 
-        if not draft.last_updated:
-            draft.last_updated = str(datetime.now())
+        display_time = draft.last_updated or datetime.now(timezone.utc)
 
         response_drafts.append(
             UserDraftResponse(
                 draft_id=draft.draft_id,
                 user_id=draft.user_id,
                 session_id=draft.session_id,
+                title=draft.title,
+                description=draft.description,
                 saved_filters=saved_filters_response,
-                Updated=time_ago(draft.last_updated),
-                last_updated=draft.last_updated
+                Updated=time_ago(display_time),
+                last_updated=display_time
             )
         )
                 
@@ -1088,7 +1150,12 @@ async def upload_selftape_videos(
     uploaded_file_urls = []
     if files:
         for file in files:
-            file_ext = os.path.splitext(file.filename)[1]
+            allowed_video_exts = [".mp4", ".mov", ".avi", ".wmv", ".m4v"]
+            file_ext = os.path.splitext(file.filename)[1].lower()
+
+            if not file.content_type.startswith("video/") or file_ext not in allowed_video_exts:
+                raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not a valid video format. Supported: {', '.join(allowed_video_exts)}")
+
             unique_filename = f"{uuid.uuid4()}{file_ext}"
             file_path = os.path.join(upload_dir, unique_filename)
             
@@ -1170,7 +1237,7 @@ async def update_pola_status(
     polas = ai_result.requested_polas
     talent_snapshot = next((t for t in polas if t.get('talent_id') == request.talent_id), None)
     if not talent_snapshot:
-        raise HTTPException(status_code=404, detail="Pola request not found in job snapshot.")
+        raise HTTPException(status_code=404, detail="Polas request not found in job snapshot.")
 
     st_request = db.query(PolaRequest).filter(
         PolaRequest.job_id == request.job_id,
@@ -1229,7 +1296,12 @@ async def upload_pola_images(
     uploaded_file_urls = []
     if files:
         for file in files:
-            file_ext = os.path.splitext(file.filename)[1]
+            allowed_image_exts = [".jpg", ".jpeg", ".png", ".webp", ".heic"]
+            file_ext = os.path.splitext(file.filename)[1].lower()
+
+            if not file.content_type.startswith("image/") or file_ext not in allowed_image_exts:
+                raise HTTPException(status_code=400, detail=f"File '{file.filename}' is not a valid image format. Supported: {', '.join(allowed_image_exts)}")
+
             unique_filename = f"{uuid.uuid4()}{file_ext}"
             file_path = os.path.join(upload_dir, unique_filename)
             with open(file_path, "wb") as buffer:

@@ -50,6 +50,8 @@ class ExtractedFilters(BaseModel):
     location: Optional[str] = Field(None, description="Location")
     continent: Optional[str] = Field(None, description="Continent")
     country: Optional[str] = Field(None, description="Country")
+    title: Optional[str] = Field(None, description="A concise title for the casting call.")
+    description: Optional[str] = Field(None, description="A summary description of the job.")
     gender: Optional[str] = Field(None, description="Gender")
     hair_color: Optional[str] = Field(None, description="Hair Color")
     eye_color: Optional[str] = Field(None, description="Eye Color")
@@ -74,12 +76,14 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     
     prompt = f"""
     You are a Casting Assistant. Extract casting requirements from the user's message.
+    Current date: {date.today()}
     Current known info: {current_filters}
     User message: "{user_input}"
     
     The mandatory fields are: location, shoot_date, budget, job_type, gender, skin_color.
     If the user input seems to be answering a question about 'job_type' (e.g. 'modeling', 'commercial'), ensure it is mapped to the 'job_type' field.
     If the user mentions a specific number of talents they want to see (e.g., 'show me 5 talents' or 'find 3 models'), extract this into the 'limit' field.
+    If multiple genders are mentioned (e.g., "men and women"), extract them as a comma-separated string in the 'gender' field (e.g., "male, female").
 
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
     """
@@ -118,21 +122,23 @@ def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
     except Exception:
         return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.")
 
-def generate_ask_response(missing_fields: List[str], user_input: str) -> str:
+def generate_ask_response(missing_fields: List[str], user_input: str, is_initial: bool = False) -> str:
     """Generates a polite response to a greeting or asks for missing mandatory fields."""
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0.6, api_key=OPENAI_API_KEY)
-    
+
+    missing_str = ", ".join(f.replace('_', ' ').title() for f in missing_fields)
+
     prompt = f"""
     You are a Casting Assistant helping a user find talent. 
     User message: "{user_input}"
-    Missing criteria: {', '.join(missing_fields)}.
+    Missing criteria: {missing_str}.
+    Initial or greeting message: {is_initial}
 
-    1. If the user message is a greeting (e.g. 'Hi', 'Hello', 'Help me find talent') or if the search is just beginning, your response MUST start with:
-    "Hi. To find talents, you need to provide mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) and add additional features (like hair color, height etc.) to refine the search."
-    
-    2. Then, politely ask for the first missing field: {missing_fields[0]}.
-    
-    Keep the response professional, concise, and focused on the talent search.
+    Instructions:
+    - If 'Initial or greeting message' is True, your response MUST start with: "Hi. To find talents, you need to provide mandatory fields ({missing_str}) and add additional features (like hair color, height etc.) to refine the search."
+    - If 'Initial or greeting message' is False, do NOT include the preamble sentence mentioned above. Simply acknowledge the input and ask for: {missing_fields[0]}.
+
+    Keep the response professional and very concise.
     """
     return llm.invoke(prompt).content
 
@@ -159,21 +165,28 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 return str(val).lower() in str(target).lower() if val and target else False
 
             if gender:
-                g_input = gender.lower()
-                if g_input == "man": g_input = "male"
-                elif g_input == "woman": g_input = "female"
-                elif "non" in g_input: g_input = "nonbinary"
+                gender_reqs = [g.strip() for g in re.split(r'[,/]', gender.lower()) if g.strip()]
+                normalized_reqs = []
+                for g_req in gender_reqs:
+                    if g_req in ["man", "men", "male"]: normalized_reqs.append("male")
+                    elif g_req in ["woman", "women", "female"]: normalized_reqs.append("female")
+                    elif "non" in g_req: normalized_reqs.append("nonbinary")
+                    else: normalized_reqs.append(g_req)
 
-                if not t.gender or t.gender.lower() != g_input:
+                if not t.gender or t.gender.lower() not in normalized_reqs:
                     continue
                 score += 1000  # Base score for passing mandatory filter
 
             if shoot_date and t.available_dates:
                 try:
+                    today = date.today()
                     user_dates = {datetime.strptime(d.strip(), '%Y-%m-%d').date() for d in shoot_date if d.strip()}
-                    talent_dates = {ad.available_date for ad in t.available_dates if ad.is_active}
-                    if not user_dates.isdisjoint(talent_dates):
-                        score += 500  
+                    valid_future_dates = {d for d in user_dates if d >= today}
+                    
+                    if valid_future_dates:
+                        talent_dates = {ad.available_date for ad in t.available_dates if ad.is_active}
+                        if not valid_future_dates.isdisjoint(talent_dates):
+                            score += 500  
                 except (ValueError, TypeError):
                     pass
 
@@ -183,7 +196,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             if continent and matches(continent, t.continent): score += 50
             if country and matches(country, t.country): score += 50
             
-            if role and matches(role, t.role): score += 80
+            if role and matches(role, t.role): score += 2000
 
             if hair_color:
                 if not matches(hair_color, t.hair_colour): continue
@@ -251,15 +264,17 @@ def reasoner_node(state: AgentState):
     SYSTEM_PROMPT = """
     You are an Elite Casting Director helping a user find talent. Your primary role is to use the 'generate_casting' tool once all mandatory criteria are met.
     All 6 mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) have been collected.
+    Current date: {today}
     Current search criteria: {filters}
 
     Your task now is to refine the search.
 
     Rules:
-    1. Ask for missing mandatory fields first.
-    2. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
-    3. If the user provides appearance details, call 'generate_casting'.
-    4. If the user declines to provide more details, call 'generate_casting'.
+    1. If any 'shoot_date' in {filters} is in the past (before {today}), you MUST inform the user: "Please update the shoot date as it is already in the past and talents are not available for past shoot dates." 
+    2. If the user refuses to update the date or says "proceed anyway", then call 'generate_casting' with the filters as they are.
+    3. Ask for missing mandatory fields first.
+    4. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
+    5. If the user provides appearance details or declines to provide more, call 'generate_casting'.
     5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
 
     Be concise."""
@@ -268,7 +283,7 @@ def reasoner_node(state: AgentState):
     tools = [generate_casting]
     llm_with_tools = llm.bind_tools(tools)
     
-    prompt_content = SYSTEM_PROMPT.format(filters=state.filters)
+    prompt_content = SYSTEM_PROMPT.format(filters=state.filters, today=date.today())
     sys_msg = SystemMessage(content=prompt_content)
     
     messages = [sys_msg] + state.messages
