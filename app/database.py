@@ -33,6 +33,9 @@ class Talent(Base):
     continent = Column(String(100), nullable=False)
     country = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False)
+    approval_status = Column(String(20), nullable=False)
+    is_available = Column(Boolean, nullable=False)
+    is_available_on_request = Column(Boolean, nullable=False)
     agent_id = Column(BigInteger, ForeignKey("accounts_user.user_id"), nullable=False)
 
     agent = relationship("UserAuth", backref="talents")
@@ -103,6 +106,10 @@ class ChatSession(Base):
     def saved_filters(self):
         return self.draft.saved_filters if self.draft else {}
 
+    @property
+    def generate_job(self):
+        return len(self.jobs) > 0
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     
@@ -115,6 +122,7 @@ class ChatMessage(Base):
     shoot_date = Column(String, nullable=True)
     budget = Column(String, nullable=True)
     job_type = Column(String, nullable=True)
+    filters = Column(JSON, nullable=True)
     session = relationship("ChatSession", back_populates="messages")
 
 class Draft(Base):
@@ -134,6 +142,10 @@ class Draft(Base):
     budget = Column(String, nullable=True)
 
     session = relationship("ChatSession", back_populates="draft")
+
+    @property
+    def generate_job(self):
+        return self.session.generate_job if self.session else False
 
 class Job(Base):
     __tablename__ = "jobs_talent_job"   
@@ -179,6 +191,10 @@ class Job(Base):
         if self.budget_min == self.budget_max:
             return f"{fmt(self.budget_min)}$"
         return f"{fmt(self.budget_min)}-{fmt(self.budget_max)}$"
+
+    @property
+    def generate_job(self):
+        return True
 
     __table_args__ = (
         CheckConstraint('applicants_count >= 0'),

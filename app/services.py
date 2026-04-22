@@ -84,12 +84,19 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
     If the user input seems to be answering a question about 'job_type' (e.g. 'modeling', 'commercial'), ensure it is mapped to the 'job_type' field.
     If the user mentions a specific number of talents they want to see (e.g., 'show me 5 talents' or 'find 3 models'), extract this into the 'limit' field.
     If multiple genders are mentioned (e.g., "men and women"), extract them as a comma-separated string in the 'gender' field (e.g., "male, female").
+    If the user mentions "both" or "all" genders, use "male, female".
+
+    IMPORTANT: 
+    1. If the user indicates a field should be cleared or they want "any" (e.g., "any date", "ignore location"), you MUST return that field as null.
+    2. If a field is NOT mentioned or the user is just saying "proceed", "yes", "search", "ok", or "hi", do NOT return that field at all (leave it unset).
 
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
     """
     try:
         result = structured_llm.invoke(prompt)
-        return {k: v for k, v in result.dict().items() if v is not None}
+        # Filter out None values to prevent accidental state erosion during "proceed" commands
+        updates = result.model_dump(exclude_unset=True) if hasattr(result, 'model_dump') else result.dict(exclude_unset=True)
+        return {k: v for k, v in updates.items() if v is not None}
     except Exception as e:
         return {}
 
@@ -154,7 +161,10 @@ def generate_casting(location: str = None, continent: str = None, country: str =
     """
     db = SessionLocal()
     try:
-        talents = db.query(Talent).outerjoin(Talent.agent).filter(Talent.is_active == True).all()
+        talents = db.query(Talent).outerjoin(Talent.agent).filter(
+            Talent.is_active == True,
+            Talent.approval_status == 'approved'
+        ).all()
         
         scored_talents = []
         
@@ -166,16 +176,26 @@ def generate_casting(location: str = None, continent: str = None, country: str =
 
             if gender:
                 gender_reqs = [g.strip() for g in re.split(r'[,/]', gender.lower()) if g.strip()]
+                if "both" in gender_reqs:
+                    gender_reqs = [g for g in gender_reqs if g != "both"]
+                    gender_reqs.extend(["male", "female"])
+                
                 normalized_reqs = []
                 for g_req in gender_reqs:
-                    if g_req in ["man", "men", "male"]: normalized_reqs.append("male")
-                    elif g_req in ["woman", "women", "female"]: normalized_reqs.append("female")
+                    if g_req in ["man", "men", "male", "m"]: normalized_reqs.append("male")
+                    elif g_req in ["woman", "women", "female", "f"]: normalized_reqs.append("female")
                     elif "non" in g_req: normalized_reqs.append("nonbinary")
                     else: normalized_reqs.append(g_req)
-
-                if not t.gender or t.gender.lower() not in normalized_reqs:
+                
+                # Normalize talent gender for comparison
+                t_gender = t.gender.strip().lower() if t.gender else ""
+                if t_gender in ["m", "man", "men"]: t_gender = "male"
+                elif t_gender in ["f", "woman", "women"]: t_gender = "female"
+                
+                if not t_gender or t_gender not in normalized_reqs:
                     continue
-                score += 1000  # Base score for passing mandatory filter
+            
+            score += 10
 
             if shoot_date and t.available_dates:
                 try:
@@ -199,14 +219,11 @@ def generate_casting(location: str = None, continent: str = None, country: str =
             if role and matches(role, t.role): score += 2000
 
             if hair_color:
-                if not matches(hair_color, t.hair_colour): continue
-                score += 50
+                if matches(hair_color, t.hair_colour): score += 50
             if eye_color:
-                if not matches(eye_color, t.eye_colour): continue
-                score += 50
+                if matches(eye_color, t.eye_colour): score += 50
             if skin_color:
-                if not matches(skin_color, t.skin_color): continue
-                score += 50
+                if matches(skin_color, t.skin_color): score += 50
 
             try:
                 if height and t.height is not None and float(t.height) == float(height): score += 10
@@ -249,8 +266,11 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "continent": t.continent,
                 "country": t.country,
                 "is_active": t.is_active,
+                "approval_status": t.approval_status,
+                "is_available": t.is_available,
+                "is_available_on_request": t.is_available_on_request,
                 "available_dates": [ad.available_date for ad in t.available_dates if ad.is_active],
-                "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)[:1]] if t.images else [],
+                "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
             })
         
         return {
@@ -262,22 +282,23 @@ def generate_casting(location: str = None, continent: str = None, country: str =
 
 def reasoner_node(state: AgentState):
     SYSTEM_PROMPT = """
-    You are an Elite Casting Director helping a user find talent. Your primary role is to use the 'generate_casting' tool once all mandatory criteria are met.
-    All 6 mandatory fields (Location, Shoot Date, Budget, Job Type, Gender, Skin Color) have been collected.
+    You are an Elite Casting Director. Your primary objective is to provide the most accurate talent matches using the 'generate_casting' tool.
+
+    WORKFLOW & CRITICAL RULES:
+    1. MANDATORY COLLECTION: Ensure you have Location, Shoot Date, Budget, Job Type, Gender, and Skin Color.
+       CRITICAL: Check the 'Current Filters' object below first. If a field exists there, it is already collected. NEVER ask for information that is already present in 'Current Filters'.
+    2. THE REFINEMENT CHECKPOINT: Once all mandatory fields are present in 'Current Filters', if no additional preferences (like hair color, height, etc.) have been provided yet and no search has been performed, you MUST ask the user: "I've noted the mandatory details. Would you like to add any additional features (e.g., hair color, height, eye color) to narrow down the search, or should I proceed with the search now?" Do NOT call 'generate_casting' at this stage unless they've already provided an additional feature or explicitly said to proceed.
+    3. SEARCH TRIGGER: You MUST call 'generate_casting' immediately if:
+       - All mandatory fields are present in 'Current Filters' and the user provides any additional features/refinements.
+       - Says "proceed", "search", "show results", "no", or refuses further refinements.
+       - Modifies any existing criteria (even mandatory ones).
+    4. PERSISTENCE & RE-SEARCH: If the user modifies any preference or adds a new one after a search has already been shown, you MUST call 'generate_casting' again to refresh results. Do not just acknowledge; call the tool.
+    5. TOOL ARGUMENTS: Pass ALL relevant criteria from {filters} to the tool.
+    6. PAST DATES: If 'shoot_date' is before {today}, warn the user before proceeding.
+
     Current date: {today}
-    Current search criteria: {filters}
-
-    Your task now is to refine the search.
-
-    Rules:
-    1. If any 'shoot_date' in {filters} is in the past (before {today}), you MUST inform the user: "Please update the shoot date as it is already in the past and talents are not available for past shoot dates." 
-    2. If the user refuses to update the date or says "proceed anyway", then call 'generate_casting' with the filters as they are.
-    3. Ask for missing mandatory fields first.
-    4. Once mandatory fields are collected, suggest appearance filters (Eye Color, Hair Color) if not already provided.
-    5. If the user provides appearance details or declines to provide more, call 'generate_casting'.
-    5. Do NOT call 'generate_casting' until the 6 mandatory fields are present.
-
-    Be concise."""
+    Current Filters: {filters}
+    """
 
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY, max_retries=3)
     tools = [generate_casting]

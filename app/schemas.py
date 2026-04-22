@@ -10,9 +10,12 @@ class OptionalDetails(BaseModel):
 
 class TalentResponse(BaseModel):
     talent_id: int 
-    images: List[str] = []
-    is_active: bool
     name: str
+    images: List[str] = []
+    is_active: bool = True
+    approval_status: str = "approved"
+    is_available: bool = True
+    is_available_on_request: bool = False
     role: Optional[str] = None
     agent_id: Optional[int] = None
     agent_name: Optional[str] = None
@@ -49,8 +52,15 @@ class ChatRequest(BaseModel):
     limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
-    save_as_draft: bool = False
-    generate_job: bool = False
+    save_as_draft: bool = True
+
+    class Config:
+        populate_by_name = True
+
+class GenerateJobRequest(BaseModel):
+    session_id: str
+    title: Optional[str] = None
+    description: Optional[str] = None
 
     class Config:
         populate_by_name = True
@@ -59,31 +69,34 @@ class SessionRequest(BaseModel):
     session_id: str
     
 class RequestTalentJobRequest(BaseModel):
-    job_id: int
+    job_id: Optional[int] = None
     talent_id: int
+    session_id: Optional[str] = None
 
 class GenerateCastingRequest(BaseModel):
     session_id: str
 
 class ShortlistTalentRequest(BaseModel):
-    job_id: int
+    job_id: Optional[int] = None
     talent_id: int
     session_id: Optional[str] = None
 
 class BookTalentRequest(BaseModel):
-    job_id: int
+    job_id: Optional[int] = None
     talent_id: int
     session_id: Optional[str] = None
 
 class SelfTapeStatusAction(BaseModel):
-    job_id: int
+    job_id: Optional[int] = None
     talent_id: int
     status: str  # 'accepted' or 'rejected'
+    session_id: Optional[str] = None
 
 class PolaStatusAction(BaseModel):
-    job_id: int
+    job_id: Optional[int] = None
     talent_id: int
     status: str  # 'accepted' or 'rejected'
+    session_id: Optional[str] = None
 
 class PolaUploadPageResponse(BaseModel):
     talent_name: str
@@ -112,9 +125,11 @@ class ChatMessageResponse(BaseModel):
     sender: str
     content: str
     timestamp: datetime
+    saved_filters: Optional[Dict[str, Any]] = Field(None, alias="saved_filters", validation_alias="filters")
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class JobResponse(BaseModel):
     job_id: int
@@ -131,6 +146,7 @@ class JobResponse(BaseModel):
     selftapes_count: int
     ecastings_count: int
     polas_count: int
+    generate_job: bool = True
     created_at: datetime
 
     class Config:
@@ -151,6 +167,7 @@ class JobResultResponse(BaseModel):
     selftapes_count: int
     ecastings_count: int
     polas_count: int
+    generate_job: bool = True
     shoot_date: Optional[str] = None
     suggested_talents: List[TalentResponse] = []
     requested_selftapes: List[TalentResponse] = []
@@ -168,8 +185,8 @@ class DraftResponse(BaseModel):
     # phase: str
     title: Optional[str] = None
     description: Optional[str] = None
-    saved_filters: Dict[str, Any] = {}
     last_updated: Optional[datetime] = None
+    generate_job: bool = False
     messages: List[ChatMessageResponse] = []
 
     class Config:
@@ -178,6 +195,7 @@ class DraftResponse(BaseModel):
 class DraftsSavedFilters(BaseModel):
     job_type: Optional[str] = Field(None, alias="Job type")
     message: Optional[str] = Field(None, alias="Message")
+    last_updated_timestamp: Optional[str] = Field(None, alias="Last Updated")
 
     class Config:
         populate_by_name = True
@@ -191,6 +209,7 @@ class UserDraftResponse(BaseModel):
     saved_filters: DraftsSavedFilters
     updated: str = Field(..., alias="Updated")
     last_updated: Optional[datetime] = None
+    generate_job: bool = False
 
     class Config:
         from_attributes = True
@@ -199,7 +218,6 @@ class UserDraftResponse(BaseModel):
 class ContinueDraftResponse(BaseModel):
     session_id: str
     messages: List[ChatMessageResponse] = []
-    saved_filters: Dict[str, Any] = {}
 
     class Config:
         from_attributes = True
@@ -217,19 +235,16 @@ class TalentDataResponse(BaseModel):
     talents: List[TalentResponse] = []
 
 class WrappedChatResponse(BaseModel):
-    session_id: str
-    timestamp: str
-    conversation: str
-    pagination: Optional[PaginationResponse] = None
-    data: Optional[TalentDataResponse] = None
-    generated_job: Optional[JobResponse] = None
+    status_code: int = 200
+    status_message: str = "Success"
+    data: ChatSessionResponse
 
 class ChatSessionResponse(BaseModel):
     session_id: str
     user_id: int
     created_at: datetime
     messages: List[ChatMessageResponse] = []
-    saved_filters: Dict[str, Any] = {}
+    generate_job: bool = False
 
     class Config:
         from_attributes = True
@@ -237,6 +252,10 @@ class ChatSessionResponse(BaseModel):
 class TalentPreview(BaseModel):
     talent_id: str
     profile_image_url: Optional[str] = None
+    is_active: bool = True
+    approval_status: str = "approved"
+    is_available: bool = True
+    is_available_on_request: bool = False
 
 class ShortlistSummaryItem(BaseModel):
     job_id: str
