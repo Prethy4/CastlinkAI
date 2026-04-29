@@ -6,8 +6,8 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Annotated, Optional
 from fastapi import Request, HTTPException, status
-from database import SessionLocal, Talent
-from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+from app.database import SessionLocal, Talent
+from app.config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
 from datetime import datetime, date
 import json
 import time
