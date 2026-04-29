@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize database
 init_db()
-from auth import get_current_user
+from app.auth import get_current_user
 
 app = FastAPI(title="AI-Powered Casting")
 
