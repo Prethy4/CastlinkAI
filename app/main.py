@@ -124,21 +124,18 @@ async def send_message(
         # --- Initialize and Populate Filters before creating user_msg ---
         filters = {}
         draft = db.query(Draft).filter(Draft.session_id == chat_session.session_id).first()
-        if not draft:
-            draft = Draft(session_id=chat_session.session_id, user_id=user_id)
-            db.add(draft)
-            db.flush()
+        
+        if draft:
+            if draft.saved_filters:
+                filters.update(draft.saved_filters)
 
-        if draft.saved_filters:
-            filters.update(draft.saved_filters)
-
-        if not filters.get("location") and draft.location: filters["location"] = draft.location
-        if not filters.get("budget") and draft.budget: filters["budget"] = draft.budget
-        if not filters.get("job_type") and draft.job_type: filters["job_type"] = draft.job_type
-        if not filters.get("shoot_date") and draft.shoot_date:
-            filters["shoot_date"] = [d.strip() for d in draft.shoot_date.split(",") if d.strip()]
-        if not filters.get("title") and draft.title: filters["title"] = draft.title
-        if not filters.get("description") and draft.description: filters["description"] = draft.description
+            if not filters.get("location") and draft.location: filters["location"] = draft.location
+            if not filters.get("budget") and draft.budget: filters["budget"] = draft.budget
+            if not filters.get("job_type") and draft.job_type: filters["job_type"] = draft.job_type
+            if not filters.get("shoot_date") and draft.shoot_date:
+                filters["shoot_date"] = [d.strip() for d in draft.shoot_date.split(",") if d.strip()]
+            if not filters.get("title") and draft.title: filters["title"] = draft.title
+            if not filters.get("description") and draft.description: filters["description"] = draft.description
 
         user_msg = ChatMessage(
             session_id=chat_session.session_id, 
@@ -162,9 +159,9 @@ async def send_message(
         existing_job = db.query(Job).filter(Job.session_id == chat_session.session_id).order_by(Job.created_at.desc()).first()
 
         if not filters.get("title"):
-            filters["title"] = (existing_job.title if existing_job else None) or draft.title or filters.get("title")
+            filters["title"] = (existing_job.title if existing_job else None) or (draft.title if draft else None) or filters.get("title")
         if not filters.get("description"):
-            filters["description"] = (existing_job.description if existing_job else None) or draft.description or filters.get("description")
+            filters["description"] = (existing_job.description if existing_job else None) or (draft.description if draft else None) or filters.get("description")
 
         # Update Title/Description if provided else generate
         if request.title: 
@@ -176,6 +173,9 @@ async def send_message(
 
         # --- Save as Draft Logic ---
         if save_as_draft:
+            if not draft:
+                draft = Draft(session_id=chat_session.session_id, user_id=user_id)
+                db.add(draft)
             draft.saved_filters = filters
             draft.phase = "saved"
             db.commit()
@@ -225,6 +225,10 @@ async def send_message(
             filters["title"] = filters.get("title") or generated_info.title
             filters["description"] = filters.get("description") or generated_info.description
             
+            if not draft:
+                draft = Draft(session_id=chat_session.session_id, user_id=user_id)
+                db.add(draft)
+                
             draft.title = filters.get("title") or draft.title
             draft.description = filters.get("description") or draft.description
             
@@ -252,6 +256,10 @@ async def send_message(
                 response_content = "I'm processing your search. Could you provide more details?"
         
         # --- Persist Session State (Draft) --- #
+        if not draft:
+            draft = Draft(session_id=chat_session.session_id, user_id=user_id)
+            db.add(draft)
+            
         current_filters = final_state.get('filters', {})
         if "title" not in current_filters and filters.get("title"): current_filters["title"] = filters["title"]
         if "description" not in current_filters and filters.get("description"): current_filters["description"] = filters["description"]
