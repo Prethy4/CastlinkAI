@@ -52,7 +52,7 @@ class ChatRequest(BaseModel):
     limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
-    save_as_draft: bool = True
+    save_as_draft: bool = False
 
     class Config:
         populate_by_name = True
