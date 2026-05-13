@@ -187,20 +187,20 @@ async def send_message(
 
         # --- Extract information from the message text (if provided) ---
         if message.strip():
-            extracted_updates = extract_information(message, filters)
+            extracted_updates = extract_information(message, filters, msgs)
             filters.update(extracted_updates)
 
         # --- Update filters with current request values (priority) ---
 
-        if request.location is not None: filters['location'] = request.location
-        if request.budget is not None: filters['budget'] = request.budget
-        if request.job_type is not None: filters['job_type'] = request.job_type
-        if request.gender is not None: filters['gender'] = request.gender
-        if request.skin_color is not None: filters['skin_color'] = request.skin_color
-        if request.role is not None: filters['role'] = request.role
+        if request.location and request.location.strip(): filters['location'] = request.location
+        if request.budget and request.budget.strip(): filters['budget'] = request.budget
+        if request.job_type and request.job_type.strip(): filters['job_type'] = request.job_type
+        if request.gender and request.gender.strip(): filters['gender'] = request.gender
+        if request.skin_color and request.skin_color.strip(): filters['skin_color'] = request.skin_color
+        if request.role and request.role.strip(): filters['role'] = request.role
         if request.limit is not None: filters['limit'] = request.limit
-        if request.title is not None: filters['title'] = request.title
-        if request.description is not None: filters['description'] = request.description
+        if request.title and request.title.strip(): filters['title'] = request.title
+        if request.description and request.description.strip(): filters['description'] = request.description
 
         # Handle shoot_date 
         if request.shoot_date is not None:
@@ -420,9 +420,9 @@ async def generate_job_api(
         job_id=new_job.job_id, 
         suggested_talents=suggested_talents_list,
         shoot_date=d_shoot_date,
-        requested_selftapes=st_list,
-        requested_ecastings=ec_list,
-        requested_polas=pl_list
+        requested_selftapes=json.loads(json.dumps(st_list, cls=CustomEncoder)),
+        requested_ecastings=json.loads(json.dumps(ec_list, cls=CustomEncoder)),
+        requested_polas=json.loads(json.dumps(pl_list, cls=CustomEncoder))
     )
     db.add(ai_result)
     draft.phase = "generated"
@@ -820,13 +820,13 @@ async def request_selftape(
             "skin_color": talent.skin_color,
             "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
             "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-            "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active],
+            "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active],
             "status": "requested",
             "tapes": []
         }
         filters['requested_selftapes'] = selftapes_list + [talent_snapshot]
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
-        draft.saved_filters = filters
+        draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
         db.commit()
         return {
@@ -870,7 +870,7 @@ async def request_selftape(
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
         "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active],
+        "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active],
         "status": "requested",
         "tapes": []
     }
@@ -883,11 +883,12 @@ async def request_selftape(
     )
     db.add(new_st_request)
     
-    ai_result.requested_selftapes = list(selftapes_list) + [talent_snapshot]
+    ai_result.requested_selftapes = json.loads(json.dumps(list(selftapes_list) + [talent_snapshot], cls=CustomEncoder))
  
     # Update session draft timestamp for consistency in chat history
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
+        job.session.draft.saved_filters = json.loads(json.dumps(job.session.draft.saved_filters, cls=CustomEncoder))
         flag_modified(job.session.draft, "saved_filters")
 
     db.commit()
@@ -949,11 +950,11 @@ async def request_ecasting(
             "skin_color": talent.skin_color,
             "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
             "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-            "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+            "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active]
         }
         filters['requested_ecastings'] = ecastings_list + [talent_snapshot]
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
-        draft.saved_filters = filters
+        draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
         db.commit()
         return {
@@ -997,14 +998,15 @@ async def request_ecasting(
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
         "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+        "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active]
     }
     
-    ai_result.requested_ecastings = list(ecastings_list) + [talent_snapshot]
+    ai_result.requested_ecastings = json.loads(json.dumps(list(ecastings_list) + [talent_snapshot], cls=CustomEncoder))
 
     # Update session draft timestamp
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
+        job.session.draft.saved_filters = json.loads(json.dumps(job.session.draft.saved_filters, cls=CustomEncoder))
         flag_modified(job.session.draft, "saved_filters")
 
     db.commit()
@@ -1066,11 +1068,11 @@ async def request_polas(
             "skin_color": talent.skin_color,
             "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
             "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-            "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+            "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active]
         }
         filters['requested_polas'] = polas_list + [talent_snapshot]
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
-        draft.saved_filters = filters
+        draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
         db.commit()
         return {
@@ -1114,14 +1116,15 @@ async def request_polas(
         "skin_color": talent.skin_color,
         "height": talent.height, "bust": talent.bust, "waist": talent.waist, "hips": talent.hips,
         "shoe_size": talent.shoe_size, "dress_size": talent.dress_size,
-        "available_dates": [ad.available_date for ad in talent.available_dates if ad.is_active]
+        "available_dates": [ad.available_date.isoformat() for ad in talent.available_dates if ad.is_active]
     }
     
-    ai_result.requested_polas = list(polas_list) + [talent_snapshot]
+    ai_result.requested_polas = json.loads(json.dumps(list(polas_list) + [talent_snapshot], cls=CustomEncoder))
 
     # Update session draft timestamp
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
+        job.session.draft.saved_filters = json.loads(json.dumps(job.session.draft.saved_filters, cls=CustomEncoder))
         flag_modified(job.session.draft, "saved_filters")
 
     db.commit()

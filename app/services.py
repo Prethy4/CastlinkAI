@@ -1,5 +1,5 @@
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, ToolMessage, BaseMessage
+from langchain_core.messages import SystemMessage, ToolMessage, BaseMessage, HumanMessage, AIMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -69,14 +69,24 @@ class ExtractedFilters(BaseModel):
     role: Optional[str] = Field(None, description="The specific role for the talent (e.g. model, actor, singer).")
     limit: Optional[int] = Field(None, description="The specific number of talent results requested by the user.")
 
-def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dict[str, Any]:
+def extract_information(user_input: str, current_filters: Dict[str, Any], messages: List[BaseMessage] = []) -> Dict[str, Any]:
     """Extracts casting filters from user input using a lightweight LLM call."""
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0, api_key=OPENAI_API_KEY)
     structured_llm = llm.with_structured_output(ExtractedFilters)
+
+    history = ""
+    # Provide the last few messages for context, excluding the current input to avoid redundancy
+    relevant_history = [m for m in messages if getattr(m, 'content', None) != user_input][-5:]
+    for m in relevant_history:
+        role = "User" if isinstance(m, HumanMessage) else "Assistant"
+        history += f"{role}: {m.content}\n"
     
     prompt = f"""
-    You are a Casting Assistant. Extract casting requirements from the user's message.
+    You are a Casting Assistant. Extract casting requirements from the user's latest message using the conversation history for context.
     Current date: {date.today()}
+    Recent conversation:
+    {history}
+
     Current known info: {current_filters}
     User message: "{user_input}"
     
@@ -96,7 +106,7 @@ def extract_information(user_input: str, current_filters: Dict[str, Any]) -> Dic
         result = structured_llm.invoke(prompt)
         # Filter out None values to prevent accidental state erosion during "proceed" commands
         updates = result.model_dump(exclude_unset=True) if hasattr(result, 'model_dump') else result.dict(exclude_unset=True)
-        return {k: v for k, v in updates.items() if v is not None}
+        return {k: v for k, v in updates.items() if v not in [None, ""]}
     except Exception as e:
         return {}
 
@@ -269,7 +279,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "approval_status": t.approval_status,
                 "is_available": t.is_available,
                 "is_available_on_request": t.is_available_on_request,
-                "available_dates": [ad.available_date for ad in t.available_dates if ad.is_active],
+                "available_dates": [ad.available_date.isoformat() for ad in t.available_dates if ad.is_active],
                 "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
             })
         
