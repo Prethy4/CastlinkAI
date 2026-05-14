@@ -157,6 +157,7 @@ class Job(Base):
     location = Column(String(255), nullable=False)
     budget_min = Column(Numeric(10, 2))
     budget_max = Column(Numeric(10, 2))
+    currency = Column(String(10), nullable=False, default="$")
     job_type = Column(String(120), nullable=False)
     status = Column(String(20), nullable=False)
     applicants_count = Column(Integer, nullable=False, default=0)
@@ -189,8 +190,8 @@ class Job(Base):
             return f"{int(val)}" if val % 1 == 0 else f"{val:.2f}"
 
         if self.budget_min == self.budget_max:
-            return f"{fmt(self.budget_min)}$"
-        return f"{fmt(self.budget_min)}-{fmt(self.budget_max)}$"
+            return f"{fmt(self.budget_min)}{self.currency}"
+        return f"{fmt(self.budget_min)}-{fmt(self.budget_max)}{self.currency}"
 
     @property
     def generate_job(self):

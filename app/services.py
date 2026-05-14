@@ -375,20 +375,28 @@ def time_ago(dt: Optional[datetime]) -> str:
     return "just now"
 
 def parse_budget(budget_str):
-    if not budget_str: return None, None
+    if not budget_str: return None, None, "$"
     
-    clean_str = str(budget_str).replace(',', '').replace('$', '').replace('£', '').replace('€', '')
+    budget_str = str(budget_str)
+    # Detect currency symbol
+    currency = "$"
+    if "€" in budget_str: currency = "€"
+    elif "R" in budget_str: currency = "R"
+    elif "£" in budget_str: currency = "£"
+
+    # Clean string for digit extraction
+    clean_str = budget_str.replace(',', '').replace('$', '').replace('£', '').replace('€', '').replace('R', '')
     nums = re.findall(r'\d+(?:\.\d+)?', clean_str)
     
-    if not nums: return None, None
+    if not nums: return None, None, currency
     
     try:
         vals = [Decimal(n) for n in nums]
-    except InvalidOperation:
-        return None, None
+    except (InvalidOperation, TypeError):
+        return None, None, currency
 
     if len(vals) == 1:
-        return vals[0], vals[0]
+        return vals[0], vals[0], currency
     
     v1, v2 = vals[0], vals[1]
-    return min(v1, v2), max(v1, v2)
+    return min(v1, v2), max(v1, v2), currency

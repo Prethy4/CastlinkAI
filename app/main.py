@@ -387,7 +387,7 @@ async def generate_job_api(
     suggested_talents_list = current_filters.get('suggested_talents_list', [])
     total_applicants = current_filters.get('total_results', 0)
     
-    budget_min, budget_max = parse_budget(d_budget)
+    budget_min, budget_max, currency = parse_budget(d_budget)
 
     # --- Create Job ---
     new_job = Job(
@@ -398,6 +398,7 @@ async def generate_job_api(
         location=d_location,
         budget_min=budget_min, 
         budget_max=budget_max, 
+        currency=currency,
         job_type=d_job_type,
         status="active",
         applicants_count=total_applicants, 
