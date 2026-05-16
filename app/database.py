@@ -29,6 +29,7 @@ class Talent(Base):
     hair_type = Column(String(100), nullable=False)
     hair_colour = Column(String(100), nullable=False)
     skin_color = Column(String(100), nullable=False)
+    skills = Column(Text, nullable=False)
     location = Column(String(255), nullable=False)
     continent = Column(String(100), nullable=False)
     country = Column(String(100), nullable=False)

@@ -31,6 +31,7 @@ class TalentResponse(BaseModel):
     hair_type: Optional[str] = None
     hair_color: Optional[str] = None
     skin_color: Optional[str] = None
+    skills: Optional[str] = None
     location: Optional[str] = None
     continent: Optional[str] = None
     country: Optional[str] = None

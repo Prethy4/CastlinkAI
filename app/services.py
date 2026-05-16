@@ -64,6 +64,7 @@ class ExtractedFilters(BaseModel):
     hips: Optional[str] = Field(None, description="Hips")
     shoe_size: Optional[str] = Field(None, description="Shoe Size")
     dress_size: Optional[str] = Field(None, description="Dress Size")
+    skills: Optional[str] = Field(None, description="Specific skills or talents (e.g. dancing, singing, martial arts, swimming).")
     budget: Optional[str] = Field(None, description="Budget")
     job_type: Optional[str] = Field(None, description="The category of the production (e.g. film, TV, commercial, theater, voiceover, modeling).")
     role: Optional[str] = Field(None, description="The specific role for the talent (e.g. model, actor, singer).")
@@ -161,7 +162,7 @@ def generate_ask_response(missing_fields: List[str], user_input: str, is_initial
 
 @tool
 def generate_casting(location: str = None, continent: str = None, country: str = None,
-                     gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None,
+                     gender: str = None, hair_color: str = None, eye_color: str = None, skin_color: str = None, skills: str = None,
                      shoot_date: List[str] = None, role: str = None,
                      height: str = None, bust: str = None, waist: str = None, hips: str = None, 
                      shoe_size: str = None, dress_size: str = None, limit: int = 100):
@@ -234,6 +235,9 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 if matches(eye_color, t.eye_colour): score += 50
             if skin_color:
                 if matches(skin_color, t.skin_color): score += 50
+            
+            if skills:
+                if matches(skills, t.skills): score += 50
 
             try:
                 if height and t.height is not None and float(t.height) == float(height): score += 10
@@ -272,6 +276,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "hair_type": t.hair_type,
                 "hair_color": t.hair_colour,
                 "skin_color": t.skin_color,
+                "skills": t.skills,
                 "location": t.location,
                 "continent": t.continent,
                 "country": t.country,
@@ -297,7 +302,7 @@ def reasoner_node(state: AgentState):
     WORKFLOW & CRITICAL RULES:
     1. MANDATORY COLLECTION: Ensure you have Location, Shoot Date, Budget, Job Type, Gender, and Skin Color.
        CRITICAL: Check the 'Current Filters' object below first. If a field exists there, it is already collected. NEVER ask for information that is already present in 'Current Filters'.
-    2. THE REFINEMENT CHECKPOINT: Once all mandatory fields are present in 'Current Filters', if no additional preferences (like hair color, height, etc.) have been provided yet and no search has been performed, you MUST ask the user: "I've noted the mandatory details. Would you like to add any additional features (e.g., hair color, height, eye color) to narrow down the search, or should I proceed with the search now?" Do NOT call 'generate_casting' at this stage unless they've already provided an additional feature or explicitly said to proceed.
+    2. THE REFINEMENT CHECKPOINT: Once all mandatory fields are present in 'Current Filters', if no additional preferences (like hair color, height, skills, etc.) have been provided yet and no search has been performed, you MUST ask the user: "I've noted the mandatory details. Would you like to add any additional features (e.g., hair color, height, eye color, or specific skills) to narrow down the search, or should I proceed with the search now?" Do NOT call 'generate_casting' at this stage unless they've already provided an additional feature or explicitly said to proceed.
     3. SEARCH TRIGGER: You MUST call 'generate_casting' immediately if:
        - All mandatory fields are present in 'Current Filters' and the user provides any additional features/refinements.
        - Says "proceed", "search", "show results", "no", or refuses further refinements.
