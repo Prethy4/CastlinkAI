@@ -382,17 +382,26 @@ def time_ago(dt: Optional[datetime]) -> str:
 def parse_budget(budget_str):
     if not budget_str: return None, None, "$"
     
-    budget_str = str(budget_str)
+    budget_str_upper = str(budget_str).upper()
+    
     # Detect currency symbol
     currency = "$"
-    if "€" in budget_str: currency = "€"
-    elif "R" in budget_str: currency = "R"
-    elif "£" in budget_str: currency = "£"
+    if "€" in budget_str_upper or "EUR" in budget_str_upper:
+        currency = "€"
+    elif "ZAR" in budget_str_upper or "R " in budget_str_upper or budget_str_upper.startswith("R"):
+        currency = "R"
+    elif "£" in budget_str_upper or "GBP" in budget_str_upper:
+        currency = "£"
+    elif "$" in budget_str_upper or "USD" in budget_str_upper:
+        currency = "$"
 
-    # Clean string for digit extraction
-    clean_str = budget_str.replace(',', '').replace('$', '').replace('£', '').replace('€', '').replace('R', '')
+    # Clean string for digit extraction by removing all known currency identifiers
+    to_remove = [',', '$', '£', '€', 'R', 'USD', 'EUR', 'ZAR', 'GBP']
+    clean_str = budget_str_upper
+    for item in to_remove:
+        clean_str = clean_str.replace(item, '')
+        
     nums = re.findall(r'\d+(?:\.\d+)?', clean_str)
-    
     if not nums: return None, None, currency
     
     try:
