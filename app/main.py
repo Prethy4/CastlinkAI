@@ -41,6 +41,7 @@ app.mount("/media", StaticFiles(directory="media"), name="media")
 limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please contact the support.")
 
 MANDATORY_FIELDS = ["location", "shoot_date", "budget", "job_type", "gender", "skin_color"]
+JOB_CREATION_MANDATORY_FIELDS = ["location", "shoot_date", "budget", "job_type"]
 
 ##########-------Exception Handlers-------##########
 
@@ -334,20 +335,54 @@ async def generate_job_api(
     user_id: int = Depends(get_current_user)
 ):
     """Explicitly generate a job from a chat session's collected data."""
-    draft = db.query(Draft).filter(Draft.session_id == request.session_id, Draft.user_id == user_id).first()
-    if not draft:
-        raise HTTPException(status_code=404, detail="Session data or draft not found.")
+    session_id = request.session_id
+    chat_session = None
+    draft = None
+
+    if session_id:
+        chat_session = db.query(ChatSession).filter(ChatSession.session_id == session_id, ChatSession.user_id == user_id).first()
+        if not chat_session:
+            raise HTTPException(status_code=404, detail="Chat session not found for the provided session_id.")
+        draft = db.query(Draft).filter(Draft.session_id == session_id, Draft.user_id == user_id).first()
+        if not draft:
+            draft = Draft(session_id=session_id, user_id=user_id)
+            db.add(draft)
+            db.flush() 
+    else:
+        chat_session = ChatSession(user_id=user_id)
+        db.add(chat_session)
+        db.flush() 
+        session_id = chat_session.session_id
+        draft = Draft(session_id=session_id, user_id=user_id)
+        db.add(draft)
+        db.flush()
 
     current_filters = draft.saved_filters or {}
+
+    # --- Merge Manual Inputs from Request Body ---
+    # This allows users to provide mandatory fields directly if they aren't in the chat/draft
+    if request.location: current_filters["location"] = request.location
+    if request.budget: current_filters["budget"] = request.budget
+    if request.job_type: current_filters["job_type"] = request.job_type
+    if request.gender: current_filters["gender"] = request.gender
+    if request.skin_color: current_filters["skin_color"] = request.skin_color
+    if request.shoot_date:
+        # Ensure consistency in date format (list of strings)
+        current_filters["shoot_date"] = request.shoot_date
     
     # --- Check Mandatory Fields ---
-    missing_fields = [k for k in MANDATORY_FIELDS if not current_filters.get(k)]
+    missing_fields = [k for k in JOB_CREATION_MANDATORY_FIELDS if not current_filters.get(k)]
     if missing_fields:
-        missing_str = ", ".join(k.replace('_', ' ').title() for k in missing_fields)
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Cannot generate job. Missing required details: {missing_str}."
-        )
+        # Check if title/description are either in filters or the direct request
+        has_title = request.title or current_filters.get("title") or draft.title
+        has_desc = request.description or current_filters.get("description") or draft.description
+        
+        if not has_title or not has_desc or missing_fields:
+            missing_str = ", ".join(k.replace('_', ' ').title() for k in missing_fields)
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot generate job. Missing required details: {missing_str}."
+            )
 
     # --- Logic for Title and Description ---
     job_title = request.title or current_filters.get("title") or draft.title
@@ -355,7 +390,7 @@ async def generate_job_api(
 
     if not job_title or not job_description:
         initial_messages = db.query(ChatMessage).filter(
-            ChatMessage.session_id == request.session_id
+            ChatMessage.session_id == session_id
         ).order_by(ChatMessage.message_id.asc()).limit(10).all()
         message_contents = [m.content for m in initial_messages]
         
@@ -367,11 +402,23 @@ async def generate_job_api(
     job_title = job_title or "Casting Call"
     job_description = job_description or "Casting for a new project."
 
+    # Sync metadata back to the draft for consistency
     current_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
     draft.title = job_title
     draft.description = job_description
     current_filters["title"] = job_title
     current_filters["description"] = job_description
+    
+    # Update draft fields from the potentially new manual inputs
+    draft.location = current_filters.get("location")
+    draft.job_type = current_filters.get("job_type")
+    draft.budget = current_filters.get("budget")
+    s_dates = current_filters.get("shoot_date")
+    if isinstance(s_dates, list):
+        draft.shoot_date = ", ".join(s_dates)
+    elif s_dates:
+        draft.shoot_date = s_dates
+
     draft.saved_filters = json.loads(json.dumps(current_filters, cls=CustomEncoder))
 
     # --- Extract metadata for Job object ---
@@ -391,8 +438,8 @@ async def generate_job_api(
 
     # --- Create Job ---
     new_job = Job(
-        job_created_by_id=user_id, 
-        session_id=request.session_id,
+        job_created_by_id=user_id,
+        session_id=session_id,
         title=job_title, 
         description=job_description, 
         location=d_location,
@@ -402,7 +449,7 @@ async def generate_job_api(
         job_type=d_job_type,
         status="active",
         applicants_count=total_applicants, 
-        shortlisted_count=db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == request.session_id, ShortlistedTalent.job_id == None).count(),
+        shortlisted_count=db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).count(),
         selftapes_count=len(st_list), 
         ecastings_count=len(ec_list), 
         polas_count=len(pl_list)
@@ -411,8 +458,8 @@ async def generate_job_api(
     db.flush()
 
     # Link existing session data
-    db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == request.session_id, ShortlistedTalent.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
-    db.query(Booking).filter(Booking.session_id == request.session_id, Booking.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
+    db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
+    db.query(Booking).filter(Booking.session_id == session_id, Booking.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
 
     for t in st_list: db.add(SelfTapeRequest(job_id=new_job.job_id, talent_id=t['talent_id'], status=t.get('status', 'requested')))
     for t in pl_list: db.add(PolaRequest(job_id=new_job.job_id, talent_id=t['talent_id'], status=t.get('status', 'requested')))
@@ -429,9 +476,12 @@ async def generate_job_api(
     draft.phase = "generated"
     db.commit()
 
-    detailed_data = await view_ai_result(new_job.job_id, user_id, db)
-    detailed_data["status_message"] = f"Job '{new_job.title}' created successfully."
-    return detailed_data
+    return {
+        "status_code": 200,
+        "status_message": f"Job '{new_job.title}' created successfully.",
+        "session_id": session_id,
+        "job_id": new_job.job_id
+    }
 
 ###########----------chat session-----------############
 

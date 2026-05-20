@@ -59,9 +59,15 @@ class ChatRequest(BaseModel):
         populate_by_name = True
 
 class GenerateJobRequest(BaseModel):
-    session_id: str
+    session_id: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
+    location: Optional[str] = None
+    shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
+    budget: Optional[str] = Field(None, alias="budget_range")
+    job_type: Optional[str] = None
+    gender: Optional[str] = None
+    skin_color: Optional[str] = None
 
     class Config:
         populate_by_name = True
