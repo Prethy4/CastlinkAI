@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
-from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate
+from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from typing import List, Optional
@@ -879,6 +879,13 @@ async def request_selftape(
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
+        
+        db.add(Notification(
+            receiver_id=talent.agent_id,
+            sender_id=user_id,
+            event=f"{talent.name} requested selftapes"
+        ))
+        
         db.commit()
         return {
             "status_code": 200, 
@@ -933,6 +940,12 @@ async def request_selftape(
         status="requested"
     )
     db.add(new_st_request)
+    
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} requested selftapes"
+    ))
     
     ai_result.requested_selftapes = json.loads(json.dumps(list(selftapes_list) + [talent_snapshot], cls=CustomEncoder))
  
@@ -1007,6 +1020,13 @@ async def request_ecasting(
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
+        
+        db.add(Notification(
+            receiver_id=talent.agent_id,
+            sender_id=user_id,
+            event=f"{talent.name} requested ecasting"
+        ))
+        
         db.commit()
         return {
             "status_code": 200, 
@@ -1053,6 +1073,12 @@ async def request_ecasting(
     }
     
     ai_result.requested_ecastings = json.loads(json.dumps(list(ecastings_list) + [talent_snapshot], cls=CustomEncoder))
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} requested ecasting"
+    ))
 
     # Update session draft timestamp
     if job.session and job.session.draft:
@@ -1125,6 +1151,13 @@ async def request_polas(
         filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         draft.saved_filters = json.loads(json.dumps(filters, cls=CustomEncoder))
         flag_modified(draft, "saved_filters")
+        
+        db.add(Notification(
+            receiver_id=talent.agent_id,
+            sender_id=user_id,
+            event=f"{talent.name} requested polas"
+        ))
+        
         db.commit()
         return {
             "status_code": 200, 
@@ -1171,6 +1204,12 @@ async def request_polas(
     }
     
     ai_result.requested_polas = json.loads(json.dumps(list(polas_list) + [talent_snapshot], cls=CustomEncoder))
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} requested polas"
+    ))
 
     # Update session draft timestamp
     if job.session and job.session.draft:
@@ -1227,6 +1266,13 @@ async def shortlist_talent(
         job_id=job.job_id if job else None
     )
     db.add(new_shortlist)
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} has been shortlisted"
+    ))
+
     db.commit()
     return {
         "status_code": 200, 
@@ -1317,6 +1363,13 @@ async def book_talent(
         job_id=job.job_id if job else None
     )
     db.add(new_booking)
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} has been booked"
+    ))
+
     db.commit()
 
     # Set is_active to false for the booking date
@@ -1451,6 +1504,12 @@ async def update_selftape_status(
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         flag_modified(job.session.draft, "saved_filters")
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} self-tape {request.status}"
+    ))
 
     db.commit()
     return {
@@ -1608,6 +1667,12 @@ async def upload_selftape_videos(
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         flag_modified(job.session.draft, "saved_filters")
 
+    db.add(Notification(
+        receiver_id=job.job_created_by_id,
+        sender_id=user_id,
+        event=f"{talent.name} Uploaded self-tape"
+    ))
+
     db.commit()
     return {
         "status_code": 200,
@@ -1668,6 +1733,12 @@ async def update_pola_status(
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         flag_modified(job.session.draft, "saved_filters")
+
+    db.add(Notification(
+        receiver_id=talent.agent_id,
+        sender_id=user_id,
+        event=f"{talent.name} polas {request.status}"
+    ))
 
     db.commit()
     return {
@@ -1767,6 +1838,12 @@ async def upload_pola_images(
     if job.session and job.session.draft:
         job.session.draft.saved_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
         flag_modified(job.session.draft, "saved_filters")
+
+    db.add(Notification(
+        receiver_id=job.job_created_by_id,
+        sender_id=user_id,
+        event=f"{talent.name} Uploaded polas"
+    ))
 
     db.commit()
     return {

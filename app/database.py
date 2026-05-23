@@ -261,6 +261,14 @@ class PolaLink(Base):
 
     request = relationship("PolaRequest", back_populates="images")
 
+class Notification(Base):
+    __tablename__ = "notifications"
+    id = Column(Integer, primary_key=True, index=True)
+    receiver_id = Column(BigInteger, ForeignKey("accounts_user.user_id"), nullable=False)
+    event = Column(Text, nullable=False)
+    sender_id = Column(BigInteger, ForeignKey("accounts_user.user_id"), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
 # Setup Engine
 if "sqlite" in DATABASE_URL:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
