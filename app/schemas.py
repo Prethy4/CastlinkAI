@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
     limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
+    casting_roles: Optional[str] = None
     save_as_draft: bool = False
 
     class Config:
@@ -68,6 +69,7 @@ class GenerateJobRequest(BaseModel):
     job_type: Optional[str] = None
     gender: Optional[str] = None
     skin_color: Optional[str] = None
+    casting_roles: Optional[str] = None
 
     class Config:
         populate_by_name = True
@@ -147,6 +149,7 @@ class JobResponse(BaseModel):
     job_type: Optional[str] = None
     description: Optional[str] = None
     location: Optional[str] = None
+    casting_roles: Optional[str] = None
     budget: Optional[str] = None
     applicants_count: int
     shortlisted_count: int
@@ -168,6 +171,7 @@ class JobResultResponse(BaseModel):
     job_type: Optional[str] = None
     description: Optional[str] = None
     location: Optional[str] = None
+    casting_roles: Optional[str] = None
     created_at: datetime
     applicants_count: int
     shortlisted_count: int

@@ -45,6 +45,7 @@ class AgentState(BaseModel):
 class GeneratedJobInfo(BaseModel):
     title: str = Field(..., description="A concise and catchy title for the casting job.")
     description: str = Field(..., description="A one-line summary of the job description.")
+    casting_roles: str = Field(..., description="A description of the specific roles or characters needed for this job.")
 
 class ExtractedFilters(BaseModel):
     location: Optional[str] = Field(None, description="Location")
@@ -52,6 +53,7 @@ class ExtractedFilters(BaseModel):
     country: Optional[str] = Field(None, description="Country")
     title: Optional[str] = Field(None, description="A concise title for the casting call.")
     description: Optional[str] = Field(None, description="A summary description of the job.")
+    casting_roles: Optional[str] = Field(None, description="Descriptions of the specific roles, characters, or parts needed.")
     gender: Optional[str] = Field(None, description="Gender")
     hair_color: Optional[str] = Field(None, description="Hair Color")
     eye_color: Optional[str] = Field(None, description="Eye Color")
@@ -96,6 +98,7 @@ def extract_information(user_input: str, current_filters: Dict[str, Any], messag
     If the user mentions a specific number of talents they want to see (e.g., 'show me 5 talents' or 'find 3 models'), extract this into the 'limit' field.
     If multiple genders are mentioned (e.g., "men and women"), extract them as a comma-separated string in the 'gender' field (e.g., "male, female").
     If the user mentions "both" or "all" genders, use "male, female".
+    If the user mentions specific roles or character names (e.g., "Seeking a lead dancer and two background actors"), extract this into 'casting_roles'.
 
     IMPORTANT: 
     1. If the user indicates a field should be cleared or they want "any" (e.g., "any date", "ignore location"), you MUST return that field as null.
@@ -120,6 +123,7 @@ def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
     
     prompt = f"""
     Based on the following conversation snippets, generate a concise job title and a one-line job description for a casting call.
+    Also, generate a 'casting_roles' section describing the specific roles or types of characters being sought.
 
     Conversation:
     ---
@@ -129,16 +133,17 @@ def generate_job_details_from_messages(messages: List[str]) -> GeneratedJobInfo:
     Example Output:
     Title: Runway Model Show
     Description: Seeking experienced runway models for a high-fashion event in Los Angeles.
+    Casting Roles: Main runway models and backup talent for a 3-day fashion week activation.
 
-    Generate the title and description.
-    NOTE: Never add any physical or facial features in Title and Description. You may add gender or job type. 
+    Generate the title, description, and casting roles.
+    NOTE: Never add any physical or facial features in Title, Description, or Casting Roles. You may add gender or job type. 
     """
     
     try:
         result = structured_llm.invoke(prompt)
         return result
-    except Exception:
-        return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.")
+    except Exception as e:
+        return GeneratedJobInfo(title="Casting Call", description="Casting for a new project.", casting_roles="Casting for specific project roles.")
 
 def generate_ask_response(missing_fields: List[str], user_input: str, is_initial: bool = False) -> str:
     """Generates a polite response to a greeting or asks for missing mandatory fields."""

@@ -137,6 +137,7 @@ async def send_message(
                 filters["shoot_date"] = [d.strip() for d in draft.shoot_date.split(",") if d.strip()]
             if not filters.get("title") and draft.title: filters["title"] = draft.title
             if not filters.get("description") and draft.description: filters["description"] = draft.description
+            if not filters.get("casting_roles") and draft.casting_roles: filters["casting_roles"] = draft.casting_roles
 
         user_msg = ChatMessage(
             session_id=chat_session.session_id, 
@@ -163,6 +164,8 @@ async def send_message(
             filters["title"] = (existing_job.title if existing_job else None) or (draft.title if draft else None) or filters.get("title")
         if not filters.get("description"):
             filters["description"] = (existing_job.description if existing_job else None) or (draft.description if draft else None) or filters.get("description")
+        if not filters.get("casting_roles"):
+            filters["casting_roles"] = (existing_job.casting_roles if existing_job else None) or (draft.casting_roles if draft else None) or filters.get("casting_roles")
 
         # Update Title/Description if provided else generate
         if request.title: 
@@ -171,6 +174,9 @@ async def send_message(
         if request.description: 
             filters['description'] = request.description
             if existing_job: existing_job.description = request.description
+        if request.casting_roles:
+            filters['casting_roles'] = request.casting_roles
+            if existing_job: existing_job.casting_roles = request.casting_roles
 
         # --- Save as Draft Logic ---
         if save_as_draft:
@@ -202,6 +208,7 @@ async def send_message(
         if request.limit is not None: filters['limit'] = request.limit
         if request.title and request.title.strip(): filters['title'] = request.title
         if request.description and request.description.strip(): filters['description'] = request.description
+        if request.casting_roles and request.casting_roles.strip(): filters['casting_roles'] = request.casting_roles
 
         # Handle shoot_date 
         if request.shoot_date is not None:
@@ -220,11 +227,12 @@ async def send_message(
         s_dates_msg = filters.get("shoot_date")
         user_msg.shoot_date = ", ".join(s_dates_msg) if isinstance(s_dates_msg, list) else s_dates_msg
 
-        if not filters.get("title") or not filters.get("description"):
+        if not filters.get("title") or not filters.get("description") or not filters.get("casting_roles"):
             context_contents = [m.content for m in msgs] + [message]
             generated_info = generate_job_details_from_messages(context_contents)
             filters["title"] = filters.get("title") or generated_info.title
             filters["description"] = filters.get("description") or generated_info.description
+            filters["casting_roles"] = filters.get("casting_roles") or generated_info.casting_roles
             
             if not draft:
                 draft = Draft(session_id=chat_session.session_id, user_id=user_id)
@@ -232,10 +240,12 @@ async def send_message(
 
             draft.title = filters.get("title") or draft.title
             draft.description = filters.get("description") or draft.description
+            draft.casting_roles = filters.get("casting_roles") or draft.casting_roles
             
             if existing_job:
                 if not existing_job.title: existing_job.title = filters["title"]
                 if not existing_job.description: existing_job.description = filters["description"]
+                if not existing_job.casting_roles: existing_job.casting_roles = filters["casting_roles"]
 
         # ---Check for mandatory fields--- #
         missing_keys = [k for k in MANDATORY_FIELDS if not filters.get(k)]
@@ -264,6 +274,7 @@ async def send_message(
         current_filters = final_state.get('filters', {})
         if "title" not in current_filters and filters.get("title"): current_filters["title"] = filters["title"]
         if "description" not in current_filters and filters.get("description"): current_filters["description"] = filters["description"]
+        if "casting_roles" not in current_filters and filters.get("casting_roles"): current_filters["casting_roles"] = filters["casting_roles"]
 
         suggested_talents_list = []
         total_results = 0
@@ -290,6 +301,7 @@ async def send_message(
 
         draft.title = current_filters.get("title") or draft.title
         draft.description = current_filters.get("description") or draft.description
+        draft.casting_roles = current_filters.get("casting_roles") or draft.casting_roles
         draft.location = current_filters.get("location")
         draft.budget = current_filters.get("budget")
         draft.job_type = current_filters.get("job_type")
@@ -366,6 +378,7 @@ async def generate_job_api(
     if request.job_type: current_filters["job_type"] = request.job_type
     if request.gender: current_filters["gender"] = request.gender
     if request.skin_color: current_filters["skin_color"] = request.skin_color
+    if request.casting_roles: current_filters["casting_roles"] = request.casting_roles
     if request.shoot_date:
         # Ensure consistency in date format (list of strings)
         current_filters["shoot_date"] = request.shoot_date
@@ -376,9 +389,14 @@ async def generate_job_api(
         # Check if title/description are either in filters or the direct request
         has_title = request.title or current_filters.get("title") or draft.title
         has_desc = request.description or current_filters.get("description") or draft.description
+        has_roles = request.casting_roles or current_filters.get("casting_roles") or draft.casting_roles
         
-        if not has_title or not has_desc or missing_fields:
-            missing_str = ", ".join(k.replace('_', ' ').title() for k in missing_fields)
+        if not has_title or not has_desc or not has_roles or missing_fields:
+            all_missing = missing_fields[:]
+            if not has_title: all_missing.append("title")
+            if not has_desc: all_missing.append("description")
+            if not has_roles: all_missing.append("casting_roles")
+            missing_str = ", ".join(k.replace('_', ' ').title() for k in all_missing)
             raise HTTPException(
                 status_code=400, 
                 detail=f"Cannot generate job. Missing required details: {missing_str}."
@@ -387,8 +405,9 @@ async def generate_job_api(
     # --- Logic for Title and Description ---
     job_title = request.title or current_filters.get("title") or draft.title
     job_description = request.description or current_filters.get("description") or draft.description
+    casting_roles = request.casting_roles or current_filters.get("casting_roles") or draft.casting_roles
 
-    if not job_title or not job_description:
+    if not job_title or not job_description or not casting_roles:
         initial_messages = db.query(ChatMessage).filter(
             ChatMessage.session_id == session_id
         ).order_by(ChatMessage.message_id.asc()).limit(10).all()
@@ -398,6 +417,7 @@ async def generate_job_api(
             generated_details = generate_job_details_from_messages(message_contents)
             job_title = job_title or generated_details.title
             job_description = job_description or generated_details.description
+            casting_roles = casting_roles or generated_details.casting_roles
 
     job_title = job_title or "Casting Call"
     job_description = job_description or "Casting for a new project."
@@ -408,11 +428,13 @@ async def generate_job_api(
     draft.description = job_description
     current_filters["title"] = job_title
     current_filters["description"] = job_description
+    current_filters["casting_roles"] = casting_roles
     
     # Update draft fields from the potentially new manual inputs
     draft.location = current_filters.get("location")
     draft.job_type = current_filters.get("job_type")
     draft.budget = current_filters.get("budget")
+    draft.casting_roles = casting_roles
     s_dates = current_filters.get("shoot_date")
     if isinstance(s_dates, list):
         draft.shoot_date = ", ".join(s_dates)
@@ -447,6 +469,7 @@ async def generate_job_api(
         budget_max=budget_max, 
         currency=currency,
         job_type=d_job_type,
+        casting_roles=casting_roles,
         status="active",
         applicants_count=total_applicants, 
         shortlisted_count=db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).count(),
