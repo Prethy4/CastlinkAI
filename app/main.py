@@ -747,6 +747,39 @@ async def get_user_jobs(
         "data": [jsonable_encoder(JobResponse.from_orm(j)) for j in query.all()]
     }
 
+@app.delete("/api/jobs/delete-job-id", dependencies=[Depends(limiter)])
+async def delete_job(
+    job_id: int,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a generated job and its associated requests and results."""
+    job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
+
+    st_reqs = db.query(SelfTapeRequest).filter(SelfTapeRequest.job_id == job_id).all()
+    for req in st_reqs:
+        db.delete(req)
+
+    pola_reqs = db.query(PolaRequest).filter(PolaRequest.job_id == job_id).all()
+    for req in pola_reqs:
+        db.delete(req)
+
+    db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete()
+    
+
+    db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None})
+    db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None})
+
+    db.delete(job)
+    db.commit()
+
+    return {
+        "status_code": 200,
+        "status_message": "Job deleted successfully"
+    }
+
 ############-----------view AI results------------###############
 
 @app.get("/api/jobs/view-ai-result", dependencies=[Depends(limiter)])
