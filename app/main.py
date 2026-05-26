@@ -758,16 +758,18 @@ async def delete_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or unauthorized")
 
-    st_reqs = db.query(SelfTapeRequest).filter(SelfTapeRequest.job_id == job_id).all()
-    for req in st_reqs:
-        db.delete(req)
+    db.query(SelfTapeLink).filter(SelfTapeLink.request_id.in_(
+        db.query(SelfTapeRequest.request_id).filter(SelfTapeRequest.job_id == job_id)
+    )).delete(synchronize_session=False)
+    db.query(SelfTapeRequest).filter(SelfTapeRequest.job_id == job_id).delete(synchronize_session=False)
 
-    pola_reqs = db.query(PolaRequest).filter(PolaRequest.job_id == job_id).all()
-    for req in pola_reqs:
-        db.delete(req)
+  
+    db.query(PolaLink).filter(PolaLink.request_id.in_(
+        db.query(PolaRequest.request_id).filter(PolaRequest.job_id == job_id)
+    )).delete(synchronize_session=False)
+    db.query(PolaRequest).filter(PolaRequest.job_id == job_id).delete(synchronize_session=False)
 
-    db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete()
-    
+    db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete(synchronize_session=False)
 
     db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None}, synchronize_session=False)
     db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None}, synchronize_session=False)
