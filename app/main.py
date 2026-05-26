@@ -769,8 +769,8 @@ async def delete_job(
     db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete()
     
 
-    db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None})
-    db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None})
+    db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None}, synchronize_session=False)
+    db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None}, synchronize_session=False)
 
     db.delete(job)
     db.commit()
@@ -1333,6 +1333,42 @@ async def shortlist_talent(
     return {
         "status_code": 200, 
         "status_message": f"Talent {talent.name} shortlisted."
+    }
+
+@app.delete("/api/talents/delete-shortlist", dependencies=[Depends(limiter)])
+async def delete_shortlist(
+    talent_id: int,
+    job_id: Optional[int] = Query(None),
+    session_id: Optional[str] = Query(None),
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove a talent from the shortlist."""
+    query = db.query(ShortlistedTalent).filter(
+        ShortlistedTalent.user_id == user_id,
+        ShortlistedTalent.talent_id == talent_id
+    )
+
+    if job_id:
+        query = query.filter(ShortlistedTalent.job_id == job_id)
+        job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
+        if job:
+            job.shortlisted_count = max(0, (job.shortlisted_count or 0) - 1)
+    elif session_id:
+        query = query.filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None)
+    else:
+        raise HTTPException(status_code=400, detail="Missing job_id or session_id")
+
+    shortlist_record = query.first()
+    if not shortlist_record:
+        raise HTTPException(status_code=404, detail="Shortlist record not found")
+
+    db.delete(shortlist_record)
+    db.commit()
+
+    return {
+        "status_code": 200,
+        "status_message": "Talent removed from shortlist successfully."
     }
 
 # ########--------View calendar of a member that shows which dates they are available---------#########
