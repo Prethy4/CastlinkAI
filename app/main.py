@@ -747,40 +747,44 @@ async def get_user_jobs(
         "data": [jsonable_encoder(JobResponse.from_orm(j)) for j in query.all()]
     }
 
-@app.delete("/api/jobs/delete-job-id", dependencies=[Depends(limiter)])
+@app.delete("/api/jobs/delete-job-id/", dependencies=[Depends(limiter)])
 async def delete_job(
     job_id: int,
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a generated job and its associated requests and results."""
-    job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
+    try:
+        job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found or unauthorized")
 
-    db.query(SelfTapeLink).filter(SelfTapeLink.request_id.in_(
-        db.query(SelfTapeRequest.request_id).filter(SelfTapeRequest.job_id == job_id)
-    )).delete(synchronize_session=False)
-    db.query(SelfTapeRequest).filter(SelfTapeRequest.job_id == job_id).delete(synchronize_session=False)
+        st_request_ids = [r[0] for r in db.query(SelfTapeRequest.request_id).filter(SelfTapeRequest.job_id == job_id).all()]
+        if st_request_ids:
+            db.query(SelfTapeLink).filter(SelfTapeLink.request_id.in_(st_request_ids)).delete(synchronize_session=False)
+        db.query(SelfTapeRequest).filter(SelfTapeRequest.job_id == job_id).delete(synchronize_session=False)
 
-  
-    db.query(PolaLink).filter(PolaLink.request_id.in_(
-        db.query(PolaRequest.request_id).filter(PolaRequest.job_id == job_id)
-    )).delete(synchronize_session=False)
-    db.query(PolaRequest).filter(PolaRequest.job_id == job_id).delete(synchronize_session=False)
+        pola_request_ids = [r[0] for r in db.query(PolaRequest.request_id).filter(PolaRequest.job_id == job_id).all()]
+        if pola_request_ids:
+            db.query(PolaLink).filter(PolaLink.request_id.in_(pola_request_ids)).delete(synchronize_session=False)
+        db.query(PolaRequest).filter(PolaRequest.job_id == job_id).delete(synchronize_session=False)
 
-    db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete(synchronize_session=False)
+        db.query(JobAIResult).filter(JobAIResult.job_id == job_id).delete(synchronize_session=False)
+        db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None}, synchronize_session=False)
+        db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None}, synchronize_session=False)
 
-    db.query(ShortlistedTalent).filter(ShortlistedTalent.job_id == job_id).update({"job_id": None}, synchronize_session=False)
-    db.query(Booking).filter(Booking.job_id == job_id).update({"job_id": None}, synchronize_session=False)
+        db.delete(job)
+        db.commit()
 
-    db.delete(job)
-    db.commit()
-
-    return {
-        "status_code": 200,
-        "status_message": "Job deleted successfully"
-    }
+        return {
+            "status_code": 200,
+            "status_message": "Job deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 ############-----------view AI results------------###############
 
