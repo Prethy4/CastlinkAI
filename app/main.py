@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from datetime import datetime, timezone, timedelta, date
-from fastapi import FastAPI, HTTPException, Depends, Query, Request, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Depends, Query, Request, File, UploadFile, Form, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
+from app.email_auth import send_email
 from typing import List, Optional
 import json
 from fastapi.middleware.cors import CORSMiddleware
@@ -1288,6 +1289,7 @@ async def request_polas(
 @app.post("/api/talents/shortlist", dependencies=[Depends(limiter)])
 async def shortlist_talent(
     request: ShortlistTalentRequest,
+    background_tasks: BackgroundTasks,
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1334,6 +1336,22 @@ async def shortlist_talent(
         sender_id=user_id,
         event=f"{talent.name} has been shortlisted"
     ))
+
+    # Send Email Notification to Agent
+    if talent.agent and talent.agent.email:
+        job_title = job.title if job else None
+        if not job_title and request.session_id:
+            job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
+        job_title = job_title or "a new project"
+        subject = f"Congratulations! {talent.name} has been shortlisted for {job_title}"
+        body = (
+            f"Dear {talent.agent.full_name},\n\n"
+            f"Congratulations! Your talent, {talent.name}, has been shortlisted for the following project: '{job_title}'.\n\n"
+            f"Please log in to your Pool of Cast portal to review the job specifics and prepare for any potential next steps.\n\n"
+            f"Best regards,\n"
+            f"The Pool of Cast Team"
+        )
+        background_tasks.add_task(send_email, talent.agent.email, subject, body)
 
     db.commit()
     return {
@@ -1400,6 +1418,7 @@ async def delete_shortlist(
 @app.post("/api/talents/book", dependencies=[Depends(limiter)])
 async def book_talent(
     request: BookTalentRequest,
+    background_tasks: BackgroundTasks,
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1468,9 +1487,25 @@ async def book_talent(
         event=f"{talent.name} has been booked"
     ))
 
+    # Send Email Notification to Agent
+    if talent.agent and talent.agent.email:
+        job_title = job.title if job else None
+        if not job_title and request.session_id:
+            job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
+        job_title = job_title or "a new project"
+        subject = f"Booking Confirmation: {talent.name} for {job_title}"
+        body = (
+            f"Dear {talent.agent.full_name},\n\n"
+            f"Congratulations! Your talent, {talent.name}, has been officially booked for the project: '{job_title}'.\n\n"
+            f"We look forward to a successful collaboration.\n\n"
+            f"Best regards,\n"
+            f"The Pool of Cast Team"
+        )
+        background_tasks.add_task(send_email, talent.agent.email, subject, body)
+
     db.commit()
 
-    # Set is_active to false for the booking date
+    # Set is_active to false for the booking data
     booking_date = new_booking.created_at.date()
     db.query(TalentAvailableDate).filter(
         TalentAvailableDate.talent_id == request.talent_id,
