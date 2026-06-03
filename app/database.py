@@ -10,6 +10,7 @@ class UserAuth(Base):
     
     user_id = Column(BigInteger, primary_key=True, index=True)
     full_name = Column(String, nullable=False)
+    email = Column(String(255), unique=True, nullable=True) # Matches DB: VARCHAR(255) UNIQUE
 
 class Talent(Base):
     __tablename__ = "talents"
