@@ -12,3 +12,9 @@ OPENAI_CHAT_MODEL = "gpt-5.1"  #gpt-5-mini
 JWT_SECRET_KEY=os.getenv("JWT_SECRET_KEY")
 JWT_ALGORITHM = "HS256"
 
+# Email Configuration for Notifications
+SMTP_SERVER = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("EMAIL_PORT", 587))
+SMTP_USERNAME = os.getenv("EMAIL_HOST_USER")
+SMTP_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+SENDER_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
