@@ -946,7 +946,7 @@ async def request_selftape(
         db.add(Notification(
             receiver_id=talent.agent_id,
             sender_id=user_id,
-            event=f"{talent.name} requested selftapes"
+            event=f"A self-tape has been requested for {talent.name} for the project '{draft.title or 'a new project'}'."
         ))
         
         db.commit()
@@ -1007,7 +1007,7 @@ async def request_selftape(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} requested selftapes"
+        event=f"A self-tape has been requested for {talent.name} for the project '{job.title}'."
     ))
     
     ai_result.requested_selftapes = json.loads(json.dumps(list(selftapes_list) + [talent_snapshot], cls=CustomEncoder))
@@ -1087,7 +1087,7 @@ async def request_ecasting(
         db.add(Notification(
             receiver_id=talent.agent_id,
             sender_id=user_id,
-            event=f"{talent.name} requested ecasting"
+            event=f"An e-casting has been requested for {talent.name} for the project '{draft.title or 'a new project'}'."
         ))
         
         db.commit()
@@ -1140,7 +1140,7 @@ async def request_ecasting(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} requested ecasting"
+        event=f"An e-casting has been requested for {talent.name} for the project '{job.title}'."
     ))
 
     # Update session draft timestamp
@@ -1218,7 +1218,7 @@ async def request_polas(
         db.add(Notification(
             receiver_id=talent.agent_id,
             sender_id=user_id,
-            event=f"{talent.name} requested polas"
+            event=f"Polaroids have been requested for {talent.name} for the project '{draft.title or 'a new project'}'."
         ))
         
         db.commit()
@@ -1271,7 +1271,7 @@ async def request_polas(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} requested polas"
+        event=f"Polaroids have been requested for {talent.name} for the project '{job.title}'."
     ))
 
     # Update session draft timestamp
@@ -1331,28 +1331,29 @@ async def shortlist_talent(
     )
     db.add(new_shortlist)
 
+    # Find job title for notification and email
+    job_title = job.title if job else None
+    if not job_title and request.session_id:
+        job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
+    job_display_name = job_title or "a new project"
+
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} has been shortlisted"
+        event=f"{talent.name} has been shortlisted for the project '{job_display_name}'."
     ))
 
     # Send Email Notification to Agent
     if talent.agent and talent.agent.email:
-        job_title = job.title if job else None
-        if not job_title and request.session_id:
-            job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
-        job_title = job_title or "a new project"
-        subject = f"Congratulations! {talent.name} has been shortlisted for {job_title}"
+        subject = f"Congratulations! {talent.name} has been shortlisted for {job_display_name}"
         body = (
             f"Dear {talent.agent.full_name},\n\n"
-            f"Congratulations! Your talent, {talent.name}, has been shortlisted for the following project: '{job_title}'.\n\n"
+            f"Congratulations! Your talent, {talent.name}, has been shortlisted for the following project: '{job_display_name}'.\n\n"
             f"Please log in to your Pool of Cast portal to review the job specifics and prepare for any potential next steps.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
         )
         background_tasks.add_task(send_email, talent.agent.email, subject, body)
-
     db.commit()
     return {
         "status_code": 200, 
@@ -1481,28 +1482,29 @@ async def book_talent(
     )
     db.add(new_booking)
 
+    # Find job title for notification and email
+    job_title = job.title if job else None
+    if not job_title and request.session_id:
+        job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
+    job_display_name = job_title or "a new project"
+
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} has been booked"
+        event=f"Booking confirmation: {talent.name} has been officially booked for the project '{job_display_name}'."
     ))
 
     # Send Email Notification to Agent
     if talent.agent and talent.agent.email:
-        job_title = job.title if job else None
-        if not job_title and request.session_id:
-            job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
-        job_title = job_title or "a new project"
-        subject = f"Booking Confirmation: {talent.name} for {job_title}"
+        subject = f"Booking Confirmation: {talent.name} for {job_display_name}"
         body = (
             f"Dear {talent.agent.full_name},\n\n"
-            f"Congratulations! Your talent, {talent.name}, has been officially booked for the project: '{job_title}'.\n\n"
+            f"Congratulations! Your talent, {talent.name}, has been officially booked for the project: '{job_display_name}'.\n\n"
             f"We look forward to a successful collaboration.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
         )
         background_tasks.add_task(send_email, talent.agent.email, subject, body)
-
     db.commit()
 
     # Set is_active to false for the booking data
@@ -1641,7 +1643,7 @@ async def update_selftape_status(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} self-tape {request.status}"
+        event=f"The self-tape request for {talent.name} for the project '{job.title}' has been {request.status}."
     ))
 
     db.commit()
@@ -1803,7 +1805,7 @@ async def upload_selftape_videos(
     db.add(Notification(
         receiver_id=job.job_created_by_id,
         sender_id=user_id,
-        event=f"{talent.name} Uploaded self-tape"
+        event=f"{talent.name} has uploaded a self-tape for the project '{job.title}'."
     ))
 
     db.commit()
@@ -1870,7 +1872,7 @@ async def update_pola_status(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} polas {request.status}"
+        event=f"The polaroid request for {talent.name} for the project '{job.title}' has been {request.status}."
     ))
 
     db.commit()
@@ -1975,7 +1977,7 @@ async def upload_pola_images(
     db.add(Notification(
         receiver_id=job.job_created_by_id,
         sender_id=user_id,
-        event=f"{talent.name} Uploaded polas"
+        event=f"{talent.name} has uploaded polaroids for the project '{job.title}'."
     ))
 
     db.commit()
