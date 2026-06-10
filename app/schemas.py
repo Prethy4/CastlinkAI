@@ -256,6 +256,7 @@ class ChatSessionResponse(BaseModel):
     created_at: datetime
     messages: List[ChatMessageResponse] = []
     generate_job: bool = False
+    job_id: Optional[int] = None
 
     class Config:
         from_attributes = True

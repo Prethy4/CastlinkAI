@@ -326,10 +326,26 @@ async def send_message(
         db.commit()
 
         db.refresh(chat_session)
+
+        job_id_to_return = None
+        generate_job_status = chat_session.generate_job
+
+        if generate_job_status:
+            latest_job = db.query(Job).filter(Job.session_id == chat_session.session_id).order_by(Job.created_at.desc()).first()
+            if latest_job:
+                job_id_to_return = latest_job.job_id
+
         response = WrappedChatResponse(
             status_code=200,
             status_message="Success",
-            data=ChatSessionResponse.from_orm(chat_session)
+            data=ChatSessionResponse(
+                session_id=chat_session.session_id,
+                user_id=chat_session.user_id,
+                created_at=chat_session.created_at,
+                messages=[ChatMessageResponse.from_orm(m) for m in chat_session.messages],
+                generate_job=generate_job_status,
+                job_id=job_id_to_return
+            )
         )
         return jsonable_encoder(response)
 
