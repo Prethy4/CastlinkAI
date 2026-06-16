@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from datetime import date, datetime
 from decimal import Decimal
@@ -39,6 +39,7 @@ class TalentResponse(BaseModel):
     status: Optional[str] = None
     tapes: List[str] = []
     polas: List[str] = []
+    assigned_roles: List[str] = []
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -53,7 +54,7 @@ class ChatRequest(BaseModel):
     limit: Optional[int] = None
     title:  Optional[str] = None
     description: Optional[str] = None
-    casting_roles: Optional[str] = None
+    casting_roles: Optional[Union[str, List[str]]] = None
     save_as_draft: bool = False
 
     class Config:
@@ -69,7 +70,8 @@ class GenerateJobRequest(BaseModel):
     job_type: Optional[str] = None
     gender: Optional[str] = None
     skin_color: Optional[str] = None
-    casting_roles: Optional[str] = None
+    casting_roles: Optional[Union[str, List[str]]] = None
+    roles: Optional[List[str]] = None
 
     class Config:
         populate_by_name = True
@@ -100,6 +102,19 @@ class SelfTapeStatusAction(BaseModel):
     talent_id: int
     status: str  # 'accepted' or 'rejected'
     session_id: Optional[str] = None
+
+class JobRoleResponse(BaseModel):
+    role_id: int
+    job_role: str
+    assign_status: bool
+    talent_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+class AssignRoleRequest(BaseModel):
+    role_id: int
+    talent_id: int
 
 class PolaStatusAction(BaseModel):
     job_id: Optional[int] = None
