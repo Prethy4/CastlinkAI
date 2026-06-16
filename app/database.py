@@ -43,6 +43,7 @@ class Talent(Base):
     agent = relationship("UserAuth", backref="talents")
     images = relationship("TalentImage", back_populates="talent")
     available_dates = relationship("TalentAvailableDate", back_populates="talent")
+    assigned_roles = relationship("JobRole", back_populates="talent")
 
 class TalentAvailableDate(Base):
     __tablename__ = "talent_available_dates"
@@ -183,6 +184,7 @@ class Job(Base):
     )
 
     session = relationship("ChatSession", back_populates="jobs")
+    roles = relationship("JobRole", back_populates="job", cascade="all, delete-orphan")
 
     @property
     def budget(self):
@@ -208,6 +210,19 @@ class Job(Base):
         CheckConstraint('ecastings_count >= 0'),
         CheckConstraint('polas_count >= 0'),
     )
+
+class JobRole(Base):
+    __tablename__ = "jobs_role_assignments"
+    
+    role_id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=True)
+    job_role = Column(String(250), nullable=False)
+    assign_status = Column(Boolean, default=True) # True means available, False means assigned
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    job = relationship("Job", back_populates="roles")
+    talent = relationship("Talent", back_populates="assigned_roles")
 
 class JobAIResult(Base):
     __tablename__ = "jobs_ai_results"
