@@ -14,8 +14,8 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
-from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification
-from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest
+from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole
+from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
 from typing import List, Optional
@@ -209,7 +209,11 @@ async def send_message(
         if request.limit is not None: filters['limit'] = request.limit
         if request.title and request.title.strip(): filters['title'] = request.title
         if request.description and request.description.strip(): filters['description'] = request.description
-        if request.casting_roles and request.casting_roles.strip(): filters['casting_roles'] = request.casting_roles
+        if request.casting_roles:
+            if isinstance(request.casting_roles, list):
+                filters['casting_roles'] = ", ".join([r.strip() for r in request.casting_roles if isinstance(r, str) and r.strip()])
+            elif isinstance(request.casting_roles, str) and request.casting_roles.strip():
+                filters['casting_roles'] = request.casting_roles
 
         # Handle shoot_date 
         if request.shoot_date is not None:
@@ -395,7 +399,11 @@ async def generate_job_api(
     if request.job_type: current_filters["job_type"] = request.job_type
     if request.gender: current_filters["gender"] = request.gender
     if request.skin_color: current_filters["skin_color"] = request.skin_color
-    if request.casting_roles: current_filters["casting_roles"] = request.casting_roles
+    if request.casting_roles:
+        if isinstance(request.casting_roles, list):
+            current_filters["casting_roles"] = ", ".join([r.strip() for r in request.casting_roles if isinstance(r, str) and r.strip()])
+        else:
+            current_filters["casting_roles"] = request.casting_roles
     if request.shoot_date:
         # Ensure consistency in date format (list of strings)
         current_filters["shoot_date"] = request.shoot_date
@@ -496,6 +504,14 @@ async def generate_job_api(
     )
     db.add(new_job)
     db.flush()
+
+    # Create separate JobRole entries if provided (via roles field or list in casting_roles)
+    roles_to_assign = request.roles if request.roles else (request.casting_roles if isinstance(request.casting_roles, list) else None)
+    if roles_to_assign:
+        for role_item in roles_to_assign:
+            if isinstance(role_item, str) and role_item.strip():
+                db_role = JobRole(job_id=new_job.job_id, job_role=role_item.strip())
+                db.add(db_role)
 
     # Link existing session data
     db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
@@ -843,6 +859,14 @@ async def view_ai_result(
     pola_status_map = {r.talent_id: r.status for r in pola_data}
     pola_links_map = {r.talent_id: [img.pola_url for img in r.images] for r in pola_data}
 
+    # Fetch all assigned roles for this job to populate the talent objects
+    role_assignments = db.query(JobRole).filter(JobRole.job_id == job_id, JobRole.talent_id != None).all()
+    talent_roles_map = {}
+    for ra in role_assignments:
+        if ra.talent_id not in talent_roles_map:
+            talent_roles_map[ra.talent_id] = []
+        talent_roles_map[ra.talent_id].append(ra.job_role)
+
     def prepare_talent_list(raw_list, list_type):
         processed = []
         for t in (raw_list or []):
@@ -858,6 +882,8 @@ async def view_ai_result(
                 if talent_id in pola_links_map: t['polas'] = pola_links_map[talent_id]
                 else: t['polas'] = t.get('polas', [])
             
+            t['assigned_roles'] = talent_roles_map.get(talent_id, [])
+
             # For e-castings, snapshots are returned as-is
             processed.append(TalentResponse(**t))
         return processed
@@ -865,13 +891,13 @@ async def view_ai_result(
     # Universal standard format: merge all into one talents list
     all_talents_map = {}
     for t in (suggested_talents or []):
-        all_talents_map[t.get('talent_id')] = TalentResponse(**t)
+        resp = TalentResponse(**t)
+        resp.assigned_roles = talent_roles_map.get(resp.talent_id, [])
+        all_talents_map[resp.talent_id] = resp
+        
     for t in prepare_talent_list(requested_selftapes_raw, 'selftape'):
         all_talents_map[t.talent_id] = t
-    for t in [TalentResponse(**t) for t in (requested_ecastings_raw or [])]:
-        all_talents_map[t.talent_id] = t
-    for t in prepare_talent_list(requested_polas_raw, 'polas'):
-        all_talents_map[t.talent_id] = t
+    # Note: e-castings and polas are already handled by prepare_talent_list helper above
 
     final_talents = list(all_talents_map.values())
     total_results = len(final_talents)
@@ -2001,6 +2027,72 @@ async def upload_pola_images(
         "status_code": 200,
         "status_message": "Polas uploaded and status updated to responded.",
         "uploaded_urls": all_new_urls
+    }
+
+@app.get("/api/jobs/available-roles", response_model=List[JobRoleResponse], dependencies=[Depends(limiter)])
+async def get_available_roles(
+    job_id: Optional[int] = Query(None),
+    session_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Fetch available roles (assign_status=True) for a specific job."""
+    query = db.query(JobRole) 
+    
+    if job_id:
+        query = query.filter(JobRole.job_id == job_id)
+    elif session_id:
+        # Find the latest job associated with this session
+        latest_job = db.query(Job).filter(Job.session_id == session_id).order_by(Job.created_at.desc()).first()
+        if not latest_job:
+            return []
+        query = query.filter(JobRole.job_id == latest_job.job_id)
+    else:
+        raise HTTPException(status_code=400, detail="Must provide job_id or session_id")
+
+    return query.all()
+
+@app.post("/api/jobs/assign-role", dependencies=[Depends(limiter)])
+async def assign_talent_role(
+    request: AssignRoleRequest,
+    db: Session = Depends(get_db)
+):
+    """Assign a role to a talent. Creates a new assignment record to allow multiple talents per role."""
+    # Find the template role (created during job generation) or the role name referenced by role_id
+    source_role = db.query(JobRole).filter(JobRole.role_id == request.role_id).first()
+    if not source_role:
+        raise HTTPException(status_code=404, detail="Role not found.")
+
+    # Verify that the talent exists before attempting to assign them to a role
+    talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
+    if not talent:
+        raise HTTPException(status_code=404, detail="Talent not found.")
+
+    # Check if this talent is already assigned to this specific role name for this job
+    existing_assignment = db.query(JobRole).filter(
+        JobRole.job_id == source_role.job_id,
+        JobRole.talent_id == request.talent_id,
+        JobRole.job_role == source_role.job_role
+    ).first()
+
+    if existing_assignment:
+        return {
+            "status_code": 200,
+            "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
+        }
+
+    # Create a NEW assignment record. This allows the original "template" role to remain available
+    new_assignment = JobRole(
+        job_id=source_role.job_id,
+        talent_id=request.talent_id,
+        job_role=source_role.job_role,
+        assign_status=True  
+    )
+    db.add(new_assignment)
+    db.commit()
+
+    return {
+        "status_code": 200,
+        "status_message": f"Talent successfully assigned to role '{source_role.job_role}'."
     }
 
 if __name__ == "__main__":
