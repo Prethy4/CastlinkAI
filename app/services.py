@@ -101,8 +101,9 @@ def extract_information(user_input: str, current_filters: Dict[str, Any], messag
     If the user mentions specific roles or character names (e.g., "Seeking a lead dancer and two background actors"), extract this into 'casting_roles'.
 
     IMPORTANT: 
-    1. If the user indicates a field should be cleared or they want "any" (e.g., "any date", "ignore location"), you MUST return that field as null.
-    2. If a field is NOT mentioned or the user is just saying "proceed", "yes", "search", "ok", or "hi", do NOT return that field at all (leave it unset).
+    1. All 'shoot_date' values MUST be converted to YYYY-MM-DD format. Use the Current Date ({date.today()}) as context to infer the year if it is missing (e.g., if the user says '24 May', convert it to '2026-05-24' assuming the context of the upcoming date).
+    2. If the user indicates a field should be cleared or they want "any" (e.g., "any date", "ignore location"), you MUST return that field as null.
+    3. If a field is NOT mentioned or the user is just saying "proceed", "yes", "search", "ok", or "hi", do NOT return that field at all (leave it unset).
 
     Return ONLY the fields that are explicitly mentioned or updated in the user message.
     """
