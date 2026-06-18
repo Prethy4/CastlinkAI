@@ -113,6 +113,12 @@ class ChatSession(Base):
     def generate_job(self):
         return len(self.jobs) > 0
 
+    @property
+    def job_id(self):
+        if self.jobs:
+            return sorted(self.jobs, key=lambda x: x.created_at, reverse=True)[0].job_id
+        return None
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     
