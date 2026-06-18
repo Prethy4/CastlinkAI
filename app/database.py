@@ -212,14 +212,13 @@ class Job(Base):
     )
 
 class JobRole(Base):
-    __tablename__ = "jobs_role_assignments"
+    __tablename__ = "jobs_jobrole"
     
-    role_id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String, ForeignKey("jobs_talent_job.job_id"), nullable=False)
     talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=True)
     job_role = Column(String(250), nullable=False)
-    assign_status = Column(Boolean, default=True) # True means available, False means assigned
-    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    assign_status = Column(Boolean, default=True) 
 
     job = relationship("Job", back_populates="roles")
     talent = relationship("Talent", back_populates="assigned_roles")
