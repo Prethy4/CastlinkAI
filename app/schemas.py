@@ -104,7 +104,7 @@ class SelfTapeStatusAction(BaseModel):
     session_id: Optional[str] = None
 
 class JobRoleResponse(BaseModel):
-    role_id: int
+    id: int
     job_role: str
     assign_status: bool
     talent_id: Optional[int] = None
@@ -113,7 +113,7 @@ class JobRoleResponse(BaseModel):
         from_attributes = True
 
 class AssignRoleRequest(BaseModel):
-    role_id: int
+    id: int
     talent_id: int
 
 class PolaStatusAction(BaseModel):
