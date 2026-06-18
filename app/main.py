@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy import cast
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
@@ -432,6 +433,9 @@ async def generate_job_api(
     job_description = request.description or current_filters.get("description") or draft.description
     casting_roles = request.casting_roles or current_filters.get("casting_roles") or draft.casting_roles
 
+    if isinstance(casting_roles, list):
+        casting_roles = ", ".join([str(r).strip() for r in casting_roles if r])
+
     if not job_title or not job_description or not casting_roles:
         initial_messages = db.query(ChatMessage).filter(
             ChatMessage.session_id == session_id
@@ -530,7 +534,12 @@ async def generate_job_api(
     )
     db.add(ai_result)
     draft.phase = "generated"
-    db.commit()
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error during job generation: {str(e)}")
 
     return {
         "status_code": 200,
@@ -2039,13 +2048,13 @@ async def get_available_roles(
     query = db.query(JobRole) 
     
     if job_id:
-        query = query.filter(JobRole.job_id == job_id)
+        query = query.filter(JobRole.job_id == str(job_id))
     elif session_id:
         # Find the latest job associated with this session
         latest_job = db.query(Job).filter(Job.session_id == session_id).order_by(Job.created_at.desc()).first()
         if not latest_job:
             return []
-        query = query.filter(JobRole.job_id == latest_job.job_id)
+        query = query.filter(JobRole.job_id == str(latest_job.job_id))
     else:
         raise HTTPException(status_code=400, detail="Must provide job_id or session_id")
 
@@ -2057,8 +2066,8 @@ async def assign_talent_role(
     db: Session = Depends(get_db)
 ):
     """Assign a role to a talent. Creates a new assignment record to allow multiple talents per role."""
-    # Find the template role (created during job generation) or the role name referenced by role_id
-    source_role = db.query(JobRole).filter(JobRole.role_id == request.role_id).first()
+    # Find the template role (created during job generation) or the role name referenced by role id
+    source_role = db.query(JobRole).filter(JobRole.id == request.id).first()
     if not source_role:
         raise HTTPException(status_code=404, detail="Role not found.")
 
@@ -2069,7 +2078,7 @@ async def assign_talent_role(
 
     # Check if this talent is already assigned to this specific role name for this job
     existing_assignment = db.query(JobRole).filter(
-        JobRole.job_id == source_role.job_id,
+        JobRole.job_id == str(source_role.job_id),
         JobRole.talent_id == request.talent_id,
         JobRole.job_role == source_role.job_role
     ).first()
