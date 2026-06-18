@@ -332,25 +332,10 @@ async def send_message(
 
         db.refresh(chat_session)
 
-        job_id_to_return = None
-        generate_job_status = chat_session.generate_job
-
-        if generate_job_status:
-            latest_job = db.query(Job).filter(Job.session_id == chat_session.session_id).order_by(Job.created_at.desc()).first()
-            if latest_job:
-                job_id_to_return = latest_job.job_id
-
         response = WrappedChatResponse(
             status_code=200,
             status_message="Success",
-            data=ChatSessionResponse(
-                session_id=chat_session.session_id,
-                user_id=chat_session.user_id,
-                created_at=chat_session.created_at,
-                messages=[ChatMessageResponse.from_orm(m) for m in chat_session.messages],
-                generate_job=generate_job_status,
-                job_id=job_id_to_return
-            )
+            data=ChatSessionResponse.from_orm(chat_session)
         )
         return jsonable_encoder(response)
 
@@ -477,7 +462,32 @@ async def generate_job_api(
     d_job_type = current_filters.get("job_type")
     d_budget = current_filters.get("budget")
     s_dates_raw = current_filters.get("shoot_date")
-    d_shoot_date = ", ".join(s_dates_raw) if isinstance(s_dates_raw, list) else s_dates_raw
+
+    # Manually normalize and format shoot_date as a JSON string ["YYYY-MM-DD"]
+    normalized_dates = []
+    if s_dates_raw:
+        raw_list = s_dates_raw if isinstance(s_dates_raw, list) else [s_dates_raw]
+        for d_str in raw_list:
+            if not d_str or not isinstance(d_str, str): continue
+            d_clean = d_str.strip()
+            # Attempt to parse common formats if not already YYYY-MM-DD
+            try:
+                # Check if it's already YYYY-MM-DD
+                datetime.strptime(d_clean, "%Y-%m-%d")
+                normalized_dates.append(d_clean)
+            except ValueError:
+                # Fallback: Attempt to parse other common formats like "24 May 2026"
+                for fmt in ("%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+                    try:
+                        normalized_dates.append(datetime.strptime(d_clean, fmt).strftime("%Y-%m-%d"))
+                        break
+                    except ValueError: continue
+                else:
+                    # If all parsing fails, keep the original string to avoid data loss, 
+                    # though the LLM prompt update should minimize this.
+                    normalized_dates.append(d_clean)
+
+    d_shoot_date = json.dumps(normalized_dates) if normalized_dates else None
     
     st_list = current_filters.get('requested_selftapes', [])
     ec_list = current_filters.get('requested_ecastings', [])
@@ -1501,6 +1511,16 @@ async def book_talent(
     if existing_booking:
         raise HTTPException(status_code=400, detail=f"Talent {talent.name} already booked.")
 
+    # Fetch assigned roles for the talent on this job
+    role_names = []
+    if job:
+        assigned_roles = db.query(JobRole.job_role).filter(
+            JobRole.job_id == str(job.job_id),
+            JobRole.talent_id == request.talent_id
+        ).all()
+        role_names = [r[0] for r in assigned_roles]
+    role_text = f" as {', '.join(role_names)}" if role_names else ""
+
     # Get booking date
     booking_date = date.today()
 
@@ -1542,15 +1562,19 @@ async def book_talent(
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"Booking confirmation: {talent.name} has been officially booked for the project '{job_display_name}'."
+        event=f"Booking confirmation: {talent.name} has been officially booked for the project '{job_display_name}'{role_text}."
     ))
 
     # Send Email Notification to Agent
     if talent.agent and talent.agent.email:
         subject = f"Booking Confirmation: {talent.name} for {job_display_name}"
+        if role_names:
+            subject += f" ({', '.join(role_names)})"
+            
         body = (
             f"Dear {talent.agent.full_name},\n\n"
-            f"Congratulations! Your talent, {talent.name}, has been officially booked for the project: '{job_display_name}'.\n\n"
+            f"Congratulations! Your talent, {talent.name}, has been officially booked for the following role(s): {', '.join(role_names) if role_names else 'unspecified'} "
+            f"for the project: '{job_display_name}'.\n\n"
             f"We look forward to a successful collaboration.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
@@ -1568,7 +1592,7 @@ async def book_talent(
 
     return {
         "status_code": 200, 
-        "status_message": f"Talent {talent.name} booked successfully."
+        "status_message": f"Talent {talent.name} booked successfully{role_text}."
     }
 
 
