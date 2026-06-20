@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint, text
+from sqlalchemy import create_engine, Column, String, Integer, BigInteger, JSON, ForeignKey, Date, Numeric, Boolean, Text, TIMESTAMP, CheckConstraint, UniqueConstraint, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 from app.config import DATABASE_URL
@@ -43,7 +43,7 @@ class Talent(Base):
     agent = relationship("UserAuth", backref="talents")
     images = relationship("TalentImage", back_populates="talent")
     available_dates = relationship("TalentAvailableDate", back_populates="talent")
-    assigned_roles = relationship("JobRole", back_populates="talent")
+    assigned_roles = relationship("JobRoleAssignment", back_populates="talent")
 
 class TalentAvailableDate(Base):
     __tablename__ = "talent_available_dates"
@@ -191,6 +191,7 @@ class Job(Base):
 
     session = relationship("ChatSession", back_populates="jobs")
     roles = relationship("JobRole", back_populates="job", cascade="all, delete-orphan")
+    role_assignments = relationship("JobRoleAssignment", back_populates="job", cascade="all, delete-orphan")
 
     @property
     def budget(self):
@@ -227,7 +228,24 @@ class JobRole(Base):
     assign_status = Column(Boolean, default=True) 
 
     job = relationship("Job", back_populates="roles")
+    talent = relationship("Talent")
+
+class JobRoleAssignment(Base):
+    __tablename__ = "jobs_jobrole_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    job_role_id = Column(Integer, ForeignKey("jobs_jobrole.id"), nullable=False)
+    talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    job = relationship("Job", back_populates="role_assignments")
+    role = relationship("JobRole")
     talent = relationship("Talent", back_populates="assigned_roles")
+
+    __table_args__ = (
+        UniqueConstraint("job_role_id", "talent_id", name="uq_jobrole_assignment_role_talent"),
+    )
 
 class JobAIResult(Base):
     __tablename__ = "jobs_ai_results"
