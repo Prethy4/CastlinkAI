@@ -15,7 +15,7 @@ from sqlalchemy import cast
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
-from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole
+from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole, JobRoleAssignment
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
@@ -878,13 +878,27 @@ async def view_ai_result(
     pola_status_map = {r.talent_id: r.status for r in pola_data}
     pola_links_map = {r.talent_id: [img.pola_url for img in r.images] for r in pola_data}
 
-    # Fetch all assigned roles for this job to populate the talent objects
-    role_assignments = db.query(JobRole).filter(JobRole.job_id == job_id, JobRole.talent_id != None).all()
+    # Fetch all assigned roles for this job to populate the talent objects.
+    role_assignments = db.query(JobRoleAssignment).join(JobRole).filter(
+        JobRoleAssignment.job_id == str(job_id)
+    ).all()
     talent_roles_map = {}
     for ra in role_assignments:
         if ra.talent_id not in talent_roles_map:
             talent_roles_map[ra.talent_id] = []
-        talent_roles_map[ra.talent_id].append(ra.job_role)
+        talent_roles_map[ra.talent_id].append(ra.role.job_role)
+
+    # Backward compatibility for assignment rows created in jobs_jobrole before
+    # assignments were separated from role definitions.
+    legacy_role_assignments = db.query(JobRole).filter(
+        JobRole.job_id == str(job_id),
+        JobRole.talent_id.is_not(None)
+    ).all()
+    for ra in legacy_role_assignments:
+        if ra.talent_id not in talent_roles_map:
+            talent_roles_map[ra.talent_id] = []
+        if ra.job_role not in talent_roles_map[ra.talent_id]:
+            talent_roles_map[ra.talent_id].append(ra.job_role)
 
     def prepare_talent_list(raw_list, list_type):
         processed = []
@@ -1514,11 +1528,21 @@ async def book_talent(
     # Fetch assigned roles for the talent on this job
     role_names = []
     if job:
-        assigned_roles = db.query(JobRole.job_role).filter(
+        assigned_roles = db.query(JobRole.job_role).join(
+            JobRoleAssignment, JobRoleAssignment.job_role_id == JobRole.id
+        ).filter(
+            JobRoleAssignment.job_id == str(job.job_id),
+            JobRoleAssignment.talent_id == request.talent_id
+        ).all()
+        role_names = [r[0] for r in assigned_roles]
+
+        legacy_assigned_roles = db.query(JobRole.job_role).filter(
             JobRole.job_id == str(job.job_id),
             JobRole.talent_id == request.talent_id
         ).all()
-        role_names = [r[0] for r in assigned_roles]
+        for role_name, in legacy_assigned_roles:
+            if role_name not in role_names:
+                role_names.append(role_name)
     role_text = f" as {', '.join(role_names)}" if role_names else ""
 
     # Get booking date
@@ -2068,8 +2092,11 @@ async def get_available_roles(
     session_id: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """Fetch available roles (assign_status=True) for a specific job."""
-    query = db.query(JobRole) 
+    """Fetch canonical roles for a specific job."""
+    query = db.query(JobRole).filter(
+        JobRole.talent_id.is_(None),
+        JobRole.assign_status.is_(True)
+    )
     
     if job_id:
         query = query.filter(JobRole.job_id == str(job_id))
@@ -2082,43 +2109,55 @@ async def get_available_roles(
     else:
         raise HTTPException(status_code=400, detail="Must provide job_id or session_id")
 
-    return query.all()
+    return query.order_by(JobRole.id.asc()).all()
 
 @app.post("/api/jobs/assign-role", dependencies=[Depends(limiter)])
 async def assign_talent_role(
     request: AssignRoleRequest,
     db: Session = Depends(get_db)
 ):
-    """Assign a role to a talent. Creates a new assignment record to allow multiple talents per role."""
-    # Find the template role (created during job generation) or the role name referenced by role id
+    """Assign an existing job role to a talent without creating a new role."""
+    # Find the canonical role definition. Legacy assignment rows may still be
+    # referenced by older clients, so map them back to their unassigned role row.
     source_role = db.query(JobRole).filter(JobRole.id == request.id).first()
     if not source_role:
         raise HTTPException(status_code=404, detail="Role not found.")
+
+    if source_role.talent_id is not None:
+        canonical_role = db.query(JobRole).filter(
+            JobRole.job_id == str(source_role.job_id),
+            JobRole.job_role == source_role.job_role,
+            JobRole.talent_id.is_(None)
+        ).first()
+        if canonical_role:
+            source_role = canonical_role
 
     # Verify that the talent exists before attempting to assign them to a role
     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found.")
 
-    # Check if this talent is already assigned to this specific role name for this job
-    existing_assignment = db.query(JobRole).filter(
+    existing_assignment = db.query(JobRoleAssignment).filter(
+        JobRoleAssignment.job_role_id == source_role.id,
+        JobRoleAssignment.talent_id == request.talent_id
+    ).first()
+
+    legacy_assignment = db.query(JobRole).filter(
         JobRole.job_id == str(source_role.job_id),
         JobRole.talent_id == request.talent_id,
         JobRole.job_role == source_role.job_role
     ).first()
 
-    if existing_assignment:
+    if existing_assignment or legacy_assignment:
         return {
             "status_code": 200,
             "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
         }
 
-    # Create a NEW assignment record. This allows the original "template" role to remain available
-    new_assignment = JobRole(
+    new_assignment = JobRoleAssignment(
         job_id=source_role.job_id,
-        talent_id=request.talent_id,
-        job_role=source_role.job_role,
-        assign_status=True  
+        job_role_id=source_role.id,
+        talent_id=request.talent_id
     )
     db.add(new_assignment)
     db.commit()
