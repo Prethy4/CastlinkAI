@@ -222,7 +222,7 @@ class JobRole(Base):
     __tablename__ = "jobs_jobrole"
     
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(String, ForeignKey("jobs_talent_job.job_id"), nullable=False)
+    job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
     talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=True)
     job_role = Column(String(250), nullable=False)
     assign_status = Column(Boolean, default=True) 
