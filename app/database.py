@@ -178,6 +178,7 @@ class Job(Base):
     polas_count = Column(Integer, nullable=False, default=0)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    job_photo = Column(String(255), nullable=True)
     # job_assigned_to_id = Column(
     #     BigInteger,
     #     ForeignKey("accounts_user.user_id"),
