@@ -14,7 +14,7 @@
 ## 🛠 Tech Stack
 
 *   **Framework**: [FastAPI](https://fastapi.tiangolo.com/)
-*   **AI Engine**: [OpenAI GPT-4](https://openai.com/), [LangChain](https://www.langchain.com/), [LangGraph](https://python.langchain.com/docs/langgraph)
+*   **AI Engine**: [OpenAI GPT-5.1](https://openai.com/), [LangChain](https://www.langchain.com/), [LangGraph](https://python.langchain.com/docs/langgraph)
 *   **Database**: PostgreSQL (via [NeonDB](https://neon.tech/))
 *   **ORM**: [SQLAlchemy](https://www.sqlalchemy.org/)
 *   **Authentication**: JWT (Jose)
