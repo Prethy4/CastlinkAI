@@ -171,6 +171,7 @@ class JobResponse(BaseModel):
     description: Optional[str] = None
     location: Optional[str] = None
     casting_roles: Optional[str] = None
+    job_photo: Optional[str] = None
     budget: Optional[str] = None
     applicants_count: int
     shortlisted_count: int
@@ -193,6 +194,7 @@ class JobResultResponse(BaseModel):
     description: Optional[str] = None
     location: Optional[str] = None
     casting_roles: Optional[str] = None
+    job_photo: Optional[str] = None
     created_at: datetime
     applicants_count: int
     shortlisted_count: int
