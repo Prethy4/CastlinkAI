@@ -19,7 +19,7 @@ from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, 
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
-from typing import List, Optional
+from typing import List, Optional, Union
 import json
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -349,12 +349,22 @@ async def send_message(
 
 @app.post("/api/jobs/generate", dependencies=[Depends(limiter)])
 async def generate_job_api(
-    request: GenerateJobRequest,
+    session_id: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    location: Optional[str] = Form(None),
+    shoot_dates: Optional[List[str]] = Form(None, alias="shoot_date"),
+    budget: Optional[str] = Form(None, alias="budget_range"),
+    job_type: Optional[str] = Form(None),
+    gender: Optional[str] = Form(None),
+    skin_color: Optional[str] = Form(None),
+    casting_roles: Optional[Union[str, List[str]]] = Form(None),
+    roles: Optional[List[str]] = Form(None),
+    photo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user)
 ):
     """Explicitly generate a job from a chat session's collected data."""
-    session_id = request.session_id
     chat_session = None
     draft = None
 
@@ -380,27 +390,27 @@ async def generate_job_api(
 
     # --- Merge Manual Inputs from Request Body ---
     # This allows users to provide mandatory fields directly if they aren't in the chat/draft
-    if request.location: current_filters["location"] = request.location
-    if request.budget: current_filters["budget"] = request.budget
-    if request.job_type: current_filters["job_type"] = request.job_type
-    if request.gender: current_filters["gender"] = request.gender
-    if request.skin_color: current_filters["skin_color"] = request.skin_color
-    if request.casting_roles:
-        if isinstance(request.casting_roles, list):
-            current_filters["casting_roles"] = ", ".join([r.strip() for r in request.casting_roles if isinstance(r, str) and r.strip()])
+    if location: current_filters["location"] = location
+    if budget: current_filters["budget"] = budget
+    if job_type: current_filters["job_type"] = job_type
+    if gender: current_filters["gender"] = gender
+    if skin_color: current_filters["skin_color"] = skin_color
+    if casting_roles:
+        if isinstance(casting_roles, list):
+            current_filters["casting_roles"] = ", ".join([r.strip() for r in casting_roles if isinstance(r, str) and r.strip()])
         else:
-            current_filters["casting_roles"] = request.casting_roles
-    if request.shoot_date:
+            current_filters["casting_roles"] = casting_roles
+    if shoot_dates:
         # Ensure consistency in date format (list of strings)
-        current_filters["shoot_date"] = request.shoot_date
+        current_filters["shoot_date"] = shoot_dates
     
     # --- Check Mandatory Fields ---
     missing_fields = [k for k in JOB_CREATION_MANDATORY_FIELDS if not current_filters.get(k)]
     if missing_fields:
         # Check if title/description are either in filters or the direct request
-        has_title = request.title or current_filters.get("title") or draft.title
-        has_desc = request.description or current_filters.get("description") or draft.description
-        has_roles = request.casting_roles or current_filters.get("casting_roles") or draft.casting_roles
+        has_title = title or current_filters.get("title") or draft.title
+        has_desc = description or current_filters.get("description") or draft.description
+        has_roles = casting_roles or current_filters.get("casting_roles") or draft.casting_roles
         
         if not has_title or not has_desc or not has_roles or missing_fields:
             all_missing = missing_fields[:]
@@ -414,9 +424,9 @@ async def generate_job_api(
             )
 
     # --- Logic for Title and Description ---
-    job_title = request.title or current_filters.get("title") or draft.title
-    job_description = request.description or current_filters.get("description") or draft.description
-    casting_roles = request.casting_roles or current_filters.get("casting_roles") or draft.casting_roles
+    job_title = title or current_filters.get("title") or draft.title
+    job_description = description or current_filters.get("description") or draft.description
+    _casting_roles = casting_roles or current_filters.get("casting_roles") or draft.casting_roles
 
     if isinstance(casting_roles, list):
         casting_roles = ", ".join([str(r).strip() for r in casting_roles if r])
@@ -435,6 +445,23 @@ async def generate_job_api(
 
     job_title = job_title or "Casting Call"
     job_description = job_description or "Casting for a new project."
+
+    # --- Handle Photo Upload ---
+    job_photo_url = None
+    if photo:
+        allowed_image_exts = [".jpg", ".jpeg", ".png", ".webp"]
+        file_ext = os.path.splitext(photo.filename)[1].lower()
+
+        if not photo.content_type.startswith("image/") or file_ext not in allowed_image_exts:
+            raise HTTPException(status_code=400, detail=f"File '{photo.filename}' is not a valid image format. Supported: {', '.join(allowed_image_exts)}")
+
+        upload_dir = "media/job_photos"
+        os.makedirs(upload_dir, exist_ok=True)
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+        file_path = os.path.join(upload_dir, unique_filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(photo.file, buffer)
+        job_photo_url = f"/media/job_photos/{unique_filename}"
 
     # Sync metadata back to the draft for consistency
     current_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
@@ -507,6 +534,7 @@ async def generate_job_api(
         budget_min=budget_min, 
         budget_max=budget_max, 
         currency=currency,
+        job_photo=job_photo_url,
         job_type=d_job_type,
         casting_roles=casting_roles,
         status="active",
@@ -520,8 +548,8 @@ async def generate_job_api(
     db.flush()
 
     # Create separate JobRole entries if provided (via roles field or list in casting_roles)
-    roles_to_assign = request.roles if request.roles else (request.casting_roles if isinstance(request.casting_roles, list) else None)
-    if roles_to_assign:
+    roles_to_assign = roles if roles else (_casting_roles if isinstance(_casting_roles, list) else None)
+    if roles_to_assign and isinstance(roles_to_assign, list):
         for role_item in roles_to_assign:
             if isinstance(role_item, str) and role_item.strip():
                 db_role = JobRole(job_id=new_job.job_id, job_role=role_item.strip())
