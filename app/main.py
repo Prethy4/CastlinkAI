@@ -470,12 +470,14 @@ async def generate_job_api(
     current_filters["title"] = job_title
     current_filters["description"] = job_description
     current_filters["casting_roles"] = casting_roles
+    current_filters["casting_roles"] = _casting_roles
     
     # Update draft fields from the potentially new manual inputs
     draft.location = current_filters.get("location")
     draft.job_type = current_filters.get("job_type")
     draft.budget = current_filters.get("budget")
     draft.casting_roles = casting_roles
+    draft.casting_roles = _casting_roles
     s_dates = current_filters.get("shoot_date")
     if isinstance(s_dates, list):
         draft.shoot_date = ", ".join(s_dates)
@@ -536,7 +538,7 @@ async def generate_job_api(
         currency=currency,
         job_photo=job_photo_url,
         job_type=d_job_type,
-        casting_roles=casting_roles,
+        casting_roles=json.dumps(_casting_roles) if isinstance(_casting_roles, list) else _casting_roles,
         status="active",
         applicants_count=total_applicants, 
         shortlisted_count=db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).count(),
@@ -547,13 +549,51 @@ async def generate_job_api(
     db.add(new_job)
     db.flush()
 
-    # Create separate JobRole entries if provided (via roles field or list in casting_roles)
-    roles_to_assign = roles if roles else (_casting_roles if isinstance(_casting_roles, list) else None)
-    if roles_to_assign and isinstance(roles_to_assign, list):
-        for role_item in roles_to_assign:
-            if isinstance(role_item, str) and role_item.strip():
-                db_role = JobRole(job_id=new_job.job_id, job_role=role_item.strip())
-                db.add(db_role)
+    # --- Create individual JobRole entries ---
+    final_roles_to_create = set()
+
+    # Priority 1: `roles` field from the form
+    if roles:
+        for r in roles:
+            if isinstance(r, str) and r.strip():
+                final_roles_to_create.add(r.strip())
+
+    # Priority 2: `_casting_roles` (from draft/filters) if `roles` is not provided
+    if not final_roles_to_create and _casting_roles:
+        roles_source = _casting_roles
+        # It might be a JSON string-list '["a", "b"]' or a simple comma-separated string "a, b"
+    # The `casting_roles` field is the source of truth. It can be a list from the form,
+    # a JSON string from a draft, or a comma-separated string.
+    roles_source = _casting_roles or roles # Use `roles` as a fallback
+    if roles_source:
+        # Handle case where it's a JSON string: '["a", "b"]'
+        try:
+            # Handle JSON string list
+            parsed_roles = json.loads(roles_source)
+            if isinstance(parsed_roles, list):
+                roles_source = parsed_roles
+            if isinstance(roles_source, str):
+                parsed = json.loads(roles_source)
+                if isinstance(parsed, list):
+                    roles_source = parsed
+        except (json.JSONDecodeError, TypeError):
+             # Handle comma-separated string
+            if isinstance(roles_source, str):
+                roles_source = [r.strip() for r in roles_source.split(',') if r.strip()]
+        
+            pass # Not a JSON string, proceed
+
+        if isinstance(roles_source, list):
+            for role_item in roles_source:
+                if isinstance(role_item, str) and role_item.strip():
+                    final_roles_to_create.add(role_item.strip())
+        elif isinstance(roles_source, str): # Handle comma-separated string "a, b, c"
+            for role_item in roles_source.split(','):
+                if role_item.strip():
+                    final_roles_to_create.add(role_item.strip())
+
+    for role_name in final_roles_to_create:
+        db.add(JobRole(job_id=new_job.job_id, job_role=role_name))
 
     # Link existing session data
     db.query(ShortlistedTalent).filter(ShortlistedTalent.session_id == session_id, ShortlistedTalent.job_id == None).update({"job_id": new_job.job_id}, synchronize_session=False)
@@ -2147,23 +2187,27 @@ async def get_available_roles(
     db: Session = Depends(get_db)
 ):
     """Fetch canonical roles for a specific job."""
-    query = db.query(JobRole).filter(
-        JobRole.talent_id.is_(None),
-        JobRole.assign_status.is_(True)
-    )
-    
+    job_identifier = None
     if job_id:
-        query = query.filter(JobRole.job_id == str(job_id))
+        job_identifier = str(job_id)
     elif session_id:
-        # Find the latest job associated with this session
         latest_job = db.query(Job).filter(Job.session_id == session_id).order_by(Job.created_at.desc()).first()
-        if not latest_job:
+        if latest_job:
+            job_identifier = str(latest_job.job_id)
+
+    if not job_identifier:
+        if session_id: # If session exists but no job, no roles to return
             return []
-        query = query.filter(JobRole.job_id == str(latest_job.job_id))
-    else:
         raise HTTPException(status_code=400, detail="Must provide job_id or session_id")
 
-    return query.order_by(JobRole.id.asc()).all()
+    # Fetch all JobRole objects for the job. We will filter unassigned ones in logic.
+    roles_query = db.query(JobRole).filter(
+        JobRole.job_id == job_identifier
+    ).order_by(JobRole.id.asc()).all()
+    
+    # This endpoint should only return roles that are not yet assigned to anyone.
+    unassigned_roles = [role for role in roles_query if not db.query(JobRoleAssignment).filter(JobRoleAssignment.job_role_id == role.id).first()]
+    return unassigned_roles
 
 @app.post("/api/jobs/assign-role", dependencies=[Depends(limiter)])
 async def assign_talent_role(
@@ -2171,20 +2215,9 @@ async def assign_talent_role(
     db: Session = Depends(get_db)
 ):
     """Assign an existing job role to a talent without creating a new role."""
-    # Find the canonical role definition. Legacy assignment rows may still be
-    # referenced by older clients, so map them back to their unassigned role row.
     source_role = db.query(JobRole).filter(JobRole.id == request.id).first()
     if not source_role:
         raise HTTPException(status_code=404, detail="Role not found.")
-
-    if source_role.talent_id is not None:
-        canonical_role = db.query(JobRole).filter(
-            JobRole.job_id == str(source_role.job_id),
-            JobRole.job_role == source_role.job_role,
-            JobRole.talent_id.is_(None)
-        ).first()
-        if canonical_role:
-            source_role = canonical_role
 
     # Verify that the talent exists before attempting to assign them to a role
     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
@@ -2196,13 +2229,9 @@ async def assign_talent_role(
         JobRoleAssignment.talent_id == request.talent_id
     ).first()
 
-    legacy_assignment = db.query(JobRole).filter(
-        JobRole.job_id == str(source_role.job_id),
-        JobRole.talent_id == request.talent_id,
-        JobRole.job_role == source_role.job_role
-    ).first()
+    role_display_name = source_role.job_role
 
-    if existing_assignment or legacy_assignment:
+    if existing_assignment:
         return {
             "status_code": 200,
             "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
