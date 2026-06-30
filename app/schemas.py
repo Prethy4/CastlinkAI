@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import json
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -170,7 +171,7 @@ class JobResponse(BaseModel):
     job_type: Optional[str] = None
     description: Optional[str] = None
     location: Optional[str] = None
-    casting_roles: Optional[str] = None
+    casting_roles: Optional[Union[str, List[str]]] = None
     job_photo: Optional[str] = None
     budget: Optional[str] = None
     applicants_count: int
@@ -183,6 +184,16 @@ class JobResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_validator('casting_roles', mode='before')
+    @classmethod
+    def parse_casting_roles(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
+        return v
 
 class JobResultResponse(BaseModel):
     job_id: int
