@@ -88,6 +88,7 @@ class Booking(Base):
     user_id = Column(BigInteger, ForeignKey("accounts_user.user_id"), nullable=False)
     talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=False)
     job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=True)
+    booking_date = Column(Date, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
 
     talent = relationship("Talent")
