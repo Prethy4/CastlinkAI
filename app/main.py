@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from sqlalchemy import cast
+from sqlalchemy import cast, String
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
@@ -1565,6 +1565,40 @@ async def delete_shortlist(
         "status_message": "Talent removed from shortlist successfully."
     }
 
+@app.delete("/api/jobs/delete-all-shortlists", dependencies=[Depends(limiter)])
+async def delete_all_shortlists_for_job(
+    job_id: int = Query(...),
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Remove all talents from the shortlist for a specific job."""
+    # Find the job and verify ownership
+    job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized.")
+
+    # Delete all shortlist records for this job and user
+    num_deleted = db.query(ShortlistedTalent).filter(
+        ShortlistedTalent.user_id == user_id,
+        ShortlistedTalent.job_id == job_id
+    ).delete(synchronize_session=False)
+
+    if num_deleted == 0:
+        return {
+            "status_code": 200,
+            "status_message": "No shortlisted talents to remove for this job."
+        }
+
+    # Update the job's shortlisted_count
+    job.shortlisted_count = 0
+    
+    db.commit()
+
+    return {
+        "status_code": 200,
+        "status_message": f"Successfully removed {num_deleted} talent(s) from the shortlist for job - '{job.title}'."
+    }
+
 # ########--------View calendar of a member that shows which dates they are available---------#########
 
 # @app.get("/talent/{talent_id}/availability")
@@ -1597,27 +1631,43 @@ async def book_talent(
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found")
 
+    if not request.booking_dates:
+        raise HTTPException(status_code=400, detail="At least one booking date must be provided.")
+
+    # Check if the talent is available on all requested booking dates
+    availabilities = db.query(TalentAvailableDate).filter(
+        TalentAvailableDate.talent_id == request.talent_id,
+        TalentAvailableDate.available_date.in_(request.booking_dates),
+        TalentAvailableDate.is_active == True
+    ).all()
+
+    available_dates_found = {a.available_date for a in availabilities}
+    unavailable_dates = [d.strftime('%Y-%m-%d') for d in request.booking_dates if d not in available_dates_found]
+
+    if unavailable_dates:
+        raise HTTPException(status_code=400, detail=f"Talent {talent.name} is not available on the following date(s): {', '.join(unavailable_dates)}.")
     job = None
     if request.job_id:
         job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
     elif request.session_id:
         job = db.query(Job).filter(Job.session_id == request.session_id, Job.job_created_by_id == user_id).order_by(Job.created_at.desc()).first()
 
-    # Check if already booked
+    # Check if already booked for any of the requested dates in a single query
     booking_query = db.query(Booking).filter(
         Booking.user_id == user_id,
-        Booking.talent_id == request.talent_id
+        Booking.talent_id == request.talent_id,
+        Booking.booking_date.in_(request.booking_dates)
     )
     if job:
         booking_query = booking_query.filter(Booking.job_id == job.job_id)
     elif request.session_id:
         booking_query = booking_query.filter(Booking.session_id == request.session_id, Booking.job_id == None)
-    else:
-        raise HTTPException(status_code=400, detail="Missing job_id or session_id")
 
-    existing_booking = booking_query.first()
-    if existing_booking:
-        raise HTTPException(status_code=400, detail=f"Talent {talent.name} already booked.")
+    existing_bookings = booking_query.all()
+    if existing_bookings:
+        booked_dates = [b.booking_date.strftime('%Y-%m-%d') for b in existing_bookings]
+        raise HTTPException(status_code=400, detail=f"Talent {talent.name} is already booked for the following date(s): {', '.join(booked_dates)}.")
+
 
     # Fetch assigned roles for the talent on this job
     role_names = []
@@ -1638,9 +1688,6 @@ async def book_talent(
             if role_name not in role_names:
                 role_names.append(role_name)
     role_text = f" as {', '.join(role_names)}" if role_names else ""
-
-    # Get booking date
-    booking_date = date.today()
 
     shortlist_query = db.query(ShortlistedTalent).filter(
         ShortlistedTalent.user_id == user_id,
@@ -1663,24 +1710,27 @@ async def book_talent(
         if job:
             job.shortlisted_count = (job.shortlisted_count or 0) + 1
 
-    new_booking = Booking(
-        session_id=request.session_id,
-        user_id=user_id,
-        talent_id=request.talent_id,
-        job_id=job.job_id if job else None
-    )
-    db.add(new_booking)
+    for booking_date in request.booking_dates:
+        new_booking = Booking(
+            session_id=request.session_id,
+            user_id=user_id,
+            talent_id=request.talent_id,
+            job_id=job.job_id if job else None,
+            booking_date=booking_date
+        )
+        db.add(new_booking)
 
     # Find job title for notification and email
     job_title = job.title if job else None
     if not job_title and request.session_id:
         job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
     job_display_name = job_title or "a new project"
+    booking_dates_str = ", ".join([d.strftime('%B %d, %Y') for d in sorted(request.booking_dates)])
 
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"Booking confirmation: {talent.name} has been officially booked for the project '{job_display_name}'{role_text}."
+        event=f"Booking confirmation: {talent.name} has been officially booked for '{job_display_name}' on {booking_dates_str}{role_text}."
     ))
 
     # Send Email Notification to Agent
@@ -1692,25 +1742,22 @@ async def book_talent(
         body = (
             f"Dear {talent.agent.full_name},\n\n"
             f"Congratulations! Your talent, {talent.name}, has been officially booked for the following role(s): {', '.join(role_names) if role_names else 'unspecified'} "
-            f"for the project: '{job_display_name}'.\n\n"
+            f"for the project: '{job_display_name}' on {booking_dates_str}.\n\n"
             f"We look forward to a successful collaboration.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
         )
         background_tasks.add_task(send_email, talent.agent.email, subject, body)
-    db.commit()
 
-    # Set is_active to false for the booking data
-    booking_date = new_booking.created_at.date()
-    db.query(TalentAvailableDate).filter(
-        TalentAvailableDate.talent_id == request.talent_id,
-        TalentAvailableDate.available_date == booking_date
-    ).update({"is_active": False})
+    # Set is_active to false for all booked dates
+    for availability in availabilities:
+        availability.is_active = False
+        db.add(availability)
     db.commit()
 
     return {
         "status_code": 200, 
-        "status_message": f"Talent {talent.name} booked successfully{role_text}."
+        "status_message": f"Talent {talent.name} booked successfully for {booking_dates_str}{role_text}."
     }
 
 
