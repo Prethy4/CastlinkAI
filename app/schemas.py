@@ -97,6 +97,7 @@ class BookTalentRequest(BaseModel):
     job_id: Optional[int] = None
     talent_id: int
     session_id: Optional[str] = None
+    booking_dates: List[date]
 
 class SelfTapeStatusAction(BaseModel):
     job_id: Optional[int] = None
