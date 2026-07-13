@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
 from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole, JobRoleAssignment
+from app.config import BASE_URL
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
@@ -461,7 +462,7 @@ async def generate_job_api(
         file_path = os.path.join(upload_dir, unique_filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(photo.file, buffer)
-        job_photo_url = f"/media/job_photos/{unique_filename}"
+        job_photo_url = f"/media/job_photos/{unique_filename}" # Stored as relative path
 
     # Sync metadata back to the draft for consistency
     current_filters['last_updated_timestamp'] = datetime.now(timezone.utc).isoformat()
@@ -1095,8 +1096,7 @@ async def request_selftape(
             "is_available": talent.is_available,
             "is_available_on_request": talent.is_available_on_request,
             "agent_id": talent.agent_id,
-            "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-            "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
             "eye_color": talent.eye_colour,
             "hair_type": talent.hair_type,
             "hair_color": talent.hair_colour,
@@ -1152,8 +1152,7 @@ async def request_selftape(
         "is_available": talent.is_available,
         "is_available_on_request": talent.is_available_on_request,
         "agent_id": talent.agent_id,
-        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
         "eye_color": talent.eye_colour,
         "hair_type": talent.hair_type,
         "hair_color": talent.hair_colour,
@@ -1238,8 +1237,7 @@ async def request_ecasting(
             "is_available": talent.is_available,
             "is_available_on_request": talent.is_available_on_request,
             "agent_id": talent.agent_id,
-            "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-            "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
             "eye_color": talent.eye_colour,
             "hair_type": talent.hair_type,
             "hair_color": talent.hair_colour,
@@ -1293,8 +1291,7 @@ async def request_ecasting(
         "is_available": talent.is_available,
         "is_available_on_request": talent.is_available_on_request,
         "agent_id": talent.agent_id,
-        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
         "eye_color": talent.eye_colour,
         "hair_type": talent.hair_type,
         "hair_color": talent.hair_colour,
@@ -1369,8 +1366,7 @@ async def request_polas(
             "is_available": talent.is_available,
             "is_available_on_request": talent.is_available_on_request,
             "agent_id": talent.agent_id,
-            "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-            "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
             "eye_color": talent.eye_colour,
             "hair_type": talent.hair_type,
             "hair_color": talent.hair_colour,
@@ -1424,8 +1420,7 @@ async def request_polas(
         "is_available": talent.is_available,
         "is_available_on_request": talent.is_available_on_request,
         "agent_id": talent.agent_id,
-        "agent_name": talent.agent.full_name if talent.agent else "Unknown",
-        "images": [f"/media/{img.image}" for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
+            "agent_name": talent.agent.full_name if talent.agent else "Unknown", "images": [f"{BASE_URL}/media/{img.image}" if not img.image.startswith('http') else img.image for img in sorted(talent.images, key=lambda x: x.image_id)] if talent.images else [],
         "eye_color": talent.eye_colour,
         "hair_type": talent.hair_type,
         "hair_color": talent.hair_colour,
@@ -1787,7 +1782,7 @@ async def get_shortlist(
             img_url = None
             if talent.images:
                 first_img = sorted(talent.images, key=lambda x: x.image_id)[0]
-                img_url = f"/media/{first_img.image}"
+                img_url = f"/media/{first_img.image}" # Stored as relative, validator in TalentPreview will fix it
             
             preview_talents.append(TalentPreview(
                 talent_id=str(talent.talent_id),
@@ -1995,7 +1990,7 @@ async def upload_selftape_videos(
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            uploaded_file_urls.append(f"/media/selftapes/{unique_filename}")
+            uploaded_file_urls.append(f"{BASE_URL}/media/selftapes/{unique_filename}")
 
     processed_external_urls = []
     if tape_urls:
@@ -2184,7 +2179,7 @@ async def upload_pola_images(
             file_path = os.path.join(upload_dir, unique_filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            uploaded_file_urls.append(f"/media/polas/{unique_filename}")
+            uploaded_file_urls.append(f"{BASE_URL}/media/polas/{unique_filename}")
 
     processed_external_urls = []
     if image_urls:
