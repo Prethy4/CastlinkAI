@@ -1,9 +1,10 @@
 from __future__ import annotations
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import json
 from datetime import date, datetime
 from decimal import Decimal
+from app.config import BASE_URL
 
 class OptionalDetails(BaseModel):
     location: Optional[str] = None
@@ -41,6 +42,21 @@ class TalentResponse(BaseModel):
     tapes: List[str] = []
     polas: List[str] = []
     assigned_roles: List[str] = []
+
+    @model_validator(mode='before')
+    @classmethod
+    def make_urls_absolute(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if 'images' in data and data['images']:
+                data['images'] = [f"{BASE_URL}{img}" if img and img.startswith('/') else img for img in data['images']]
+            if 'tapes' in data and data['tapes']:
+                data['tapes'] = [f"{BASE_URL}{tape}" if tape and tape.startswith('/') else tape for tape in data['tapes']]
+            if 'polas' in data and data['polas']:
+                data['polas'] = [f"{BASE_URL}{pola}" if pola and pola.startswith('/') else pola for pola in data['polas']]
+        return data
+
+    class Config:
+        from_attributes = True
 
 class ChatRequest(BaseModel):
     session_id: Optional[str] = None
@@ -139,6 +155,13 @@ class PolaUploadPageResponse(BaseModel):
     status: str
     existing_images: List[str] = []
 
+    @field_validator('existing_images', mode='before')
+    @classmethod
+    def make_image_urls_absolute(cls, v):
+        if isinstance(v, list):
+            return [f"{BASE_URL}{img}" if img and img.startswith('/') else img for img in v]
+        return v
+
 class SelfTapeUploadRequest(BaseModel):
     job_id: int
     talent_id: int
@@ -152,6 +175,13 @@ class SelfTapeUploadPageResponse(BaseModel):
     timeline: Optional[str] = None # Shoot dates
     status: str
     existing_tapes: List[str] = []
+
+    @field_validator('existing_tapes', mode='before')
+    @classmethod
+    def make_tape_urls_absolute(cls, v):
+        if isinstance(v, list):
+            return [f"{BASE_URL}{tape}" if tape and tape.startswith('/') else tape for tape in v]
+        return v
 
 class ChatMessageResponse(BaseModel):
     sender: str
@@ -196,6 +226,13 @@ class JobResponse(BaseModel):
                 return v
         return v
 
+    @field_validator('job_photo', mode='before')
+    @classmethod
+    def make_photo_url_absolute(cls, v):
+        if isinstance(v, str) and v.startswith('/'):
+            return f"{BASE_URL}{v}"
+        return v
+
 class JobResultResponse(BaseModel):
     job_id: int
     job_created_by_id: int
@@ -223,6 +260,13 @@ class JobResultResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_validator('job_photo', mode='before')
+    @classmethod
+    def make_photo_url_absolute(cls, v):
+        if isinstance(v, str) and v.startswith('/'):
+            return f"{BASE_URL}{v}"
+        return v
 
 class DraftResponse(BaseModel):
     draft_id: int
@@ -303,6 +347,13 @@ class TalentPreview(BaseModel):
     approval_status: str = "approved"
     is_available: bool = True
     is_available_on_request: bool = False
+
+    @field_validator('profile_image_url', mode='before')
+    @classmethod
+    def make_photo_url_absolute(cls, v):
+        if isinstance(v, str) and v.startswith('/'):
+            return f"{BASE_URL}{v}"
+        return v
 
 class ShortlistSummaryItem(BaseModel):
     job_id: str
