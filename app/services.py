@@ -5,9 +5,9 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Annotated, Optional
-from fastapi import Request, HTTPException, status
+from fastapi import Request, HTTPException, status, Depends
 from app.database import SessionLocal, Talent
-from app.config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+from app.config import OPENAI_API_KEY, OPENAI_CHAT_MODEL, BASE_URL
 from datetime import datetime, date
 import json
 import time
@@ -291,7 +291,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "is_available": t.is_available,
                 "is_available_on_request": t.is_available_on_request,
                 "available_dates": [ad.available_date.isoformat() for ad in t.available_dates if ad.is_active],
-                "images": [f"/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
+                "images": [f"{BASE_URL}/media/{img.image}" for img in sorted(t.images, key=lambda x: x.image_id)] if t.images else [],
             })
         
         return {
