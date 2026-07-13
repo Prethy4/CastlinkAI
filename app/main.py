@@ -1990,7 +1990,7 @@ async def upload_selftape_videos(
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            uploaded_file_urls.append(f"{BASE_URL}/media/selftapes/{unique_filename}")
+            uploaded_file_urls.append(f"/media/selftapes/{unique_filename}")
 
     processed_external_urls = []
     if tape_urls:
@@ -2017,7 +2017,7 @@ async def upload_selftape_videos(
     
     all_new_urls = uploaded_file_urls + processed_external_urls
     
-    if not all_new_urls:
+    if not all_new_urls and not files:
         raise HTTPException(status_code=400, detail="No files or video URLs provided.")
 
     for url in all_new_urls:
@@ -2047,7 +2047,7 @@ async def upload_selftape_videos(
     return {
         "status_code": 200,
         "status_message": "Self-tapes uploaded and status updated to responded.",
-        "uploaded_urls": all_new_urls
+        "uploaded_urls": [f"{BASE_URL}{url}" if url.startswith('/') else url for url in all_new_urls]
     }
 
 @app.post("/api/jobs/polas/action", dependencies=[Depends(limiter)])
@@ -2179,7 +2179,7 @@ async def upload_pola_images(
             file_path = os.path.join(upload_dir, unique_filename)
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            uploaded_file_urls.append(f"{BASE_URL}/media/polas/{unique_filename}")
+            uploaded_file_urls.append(f"/media/polas/{unique_filename}")
 
     processed_external_urls = []
     if image_urls:
@@ -2190,7 +2190,7 @@ async def upload_pola_images(
     existing_json_tapes = list(talent_snapshot.get('polas') or [])
     all_new_urls = uploaded_file_urls + processed_external_urls
     
-    if not all_new_urls:
+    if not all_new_urls and not files:
         raise HTTPException(status_code=400, detail="No files or image URLs provided.")
 
     for url in all_new_urls:
@@ -2219,7 +2219,7 @@ async def upload_pola_images(
     return {
         "status_code": 200,
         "status_message": "Polas uploaded and status updated to responded.",
-        "uploaded_urls": all_new_urls
+        "uploaded_urls": [f"{BASE_URL}{url}" if url.startswith('/') else url for url in all_new_urls]
     }
 
 @app.get("/api/jobs/available-roles", response_model=List[JobRoleResponse], dependencies=[Depends(limiter)])
