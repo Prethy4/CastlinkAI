@@ -125,8 +125,11 @@ class JobRoleResponse(BaseModel):
     id: int
     job_role: str
     assign_status: bool
-    talent_id: Optional[int] = None
+    talent_id: List[int] = []
     session_id: Optional[str] = None
+
+    class Config:
+        orm_mode = True
 
 class CreateRoleRequest(BaseModel):
     job_id: Optional[int] = None

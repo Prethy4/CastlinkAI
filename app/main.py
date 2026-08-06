@@ -2222,27 +2222,21 @@ async def upload_pola_images(
         "uploaded_urls": [f"{BASE_URL}{url}" if url.startswith('/') else url for url in all_new_urls]
     }
 
-def _normalize_job_roles(role_rows: list[JobRole]) -> list[dict]:
-    normalized = {}
+def _canonical_job_roles(role_rows: list[JobRole]) -> list[JobRole]:
+    grouped = {}
     for role in role_rows:
-        role_data = {
-            "id": role.id,
-            "job_role": role.job_role,
-            "assign_status": bool(role.talent_id),
-            "talent_id": role.talent_id,
-            "session_id": getattr(role, "session_id", None),
-        }
+        grouped.setdefault(role.job_role, []).append(role)
 
-        existing = normalized.get(role.job_role)
-        if existing is None:
-            normalized[role.job_role] = role_data
-            continue
+    canonical_roles = []
+    for job_role, rows in grouped.items():
+        rows.sort(key=lambda r: r.id)
+        canonical = rows[0]
+        talent_ids = [r.talent_id for r in rows if r.talent_id is not None]
+        canonical.assign_status = len(talent_ids) > 0
+        canonical.talent_id = talent_ids
+        canonical_roles.append(canonical)
 
-        # Prefer a row that has an assigned talent over an unassigned duplicate.
-        if existing["talent_id"] is None and role_data["talent_id"] is not None:
-            normalized[role.job_role] = role_data
-
-    return list(normalized.values())
+    return canonical_roles
 
 
 @app.get("/api/jobs/available-roles", response_model=List[JobRoleResponse], dependencies=[Depends(limiter)])
@@ -2269,7 +2263,7 @@ async def get_available_roles(
         JobRole.job_id == job_identifier
     ).order_by(JobRole.job_role.asc(), JobRole.id.asc()).all()
 
-    return _normalize_job_roles(roles_query)
+    return _canonical_job_roles(roles_query)
 
 
 @app.post("/api/jobs/assign-role", dependencies=[Depends(limiter)])
@@ -2286,40 +2280,37 @@ async def assign_talent_role(
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found.")
 
-    if source_role.talent_id is not None:
-        if source_role.talent_id == request.talent_id:
-            return {
-                "status_code": 200,
-                "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
-            }
-        raise HTTPException(status_code=400, detail="Role is already assigned to another talent. Unassign first.")
+    if source_role.talent_id is not None and source_role.talent_id == request.talent_id:
+        return {
+            "status_code": 200,
+            "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
+        }
 
-    duplicate_assigned_role = db.query(JobRole).filter(
+    existing_role_assignment = db.query(JobRole).filter(
         JobRole.job_id == source_role.job_id,
         JobRole.job_role == source_role.job_role,
-        JobRole.talent_id.isnot(None)
+        JobRole.talent_id == request.talent_id
     ).first()
+    if existing_role_assignment:
+        return {
+            "status_code": 200,
+            "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
+        }
 
-    if duplicate_assigned_role is not None:
-        if duplicate_assigned_role.talent_id != request.talent_id:
-            raise HTTPException(status_code=400, detail="Role is already assigned to another talent. Unassign first.")
-        # Consolidate the duplicate assignment into the canonical role row.
-        db.delete(duplicate_assigned_role)
+    new_role_entry = JobRole(
+        job_id=source_role.job_id,
+        job_role=source_role.job_role,
+        talent_id=request.talent_id,
+        assign_status=True
+    )
+    db.add(new_role_entry)
+    db.flush()
 
-    source_role.talent_id = request.talent_id
-    source_role.assign_status = True
-
-    existing_assignment = db.query(JobRoleAssignment).filter(
-        JobRoleAssignment.job_role_id == source_role.id,
-        JobRoleAssignment.talent_id == request.talent_id
-    ).first()
-    if not existing_assignment:
-        db.add(JobRoleAssignment(
-            job_id=source_role.job_id,
-            job_role_id=source_role.id,
-            talent_id=request.talent_id
-        ))
-
+    db.add(JobRoleAssignment(
+        job_id=source_role.job_id,
+        job_role_id=new_role_entry.id,
+        talent_id=request.talent_id
+    ))
     db.commit()
 
     return {
@@ -2363,18 +2354,14 @@ async def unassign_talent_role(
 
     if target_role.talent_id is not None:
         assigned_row = target_role
-        canonical_row = db.query(JobRole).filter(
-            JobRole.job_id == assigned_row.job_id,
-            JobRole.job_role == assigned_row.job_role,
-            JobRole.talent_id.is_(None)
-        ).first()
     else:
-        canonical_row = target_role
         assigned_row = db.query(JobRole).filter(
-            JobRole.job_id == canonical_row.job_id,
-            JobRole.job_role == canonical_row.job_role,
+            JobRole.job_id == target_role.job_id,
+            JobRole.job_role == target_role.job_role,
             JobRole.talent_id.isnot(None)
-        ).first()
+        ).order_by(JobRole.id.asc()).first()
+        if not assigned_row:
+            raise HTTPException(status_code=404, detail="No assigned talent found for the provided role.")
 
     if not assigned_row:
         raise HTTPException(status_code=404, detail="Assignment not found or already unassigned.")
@@ -2383,23 +2370,23 @@ async def unassign_talent_role(
     assigned_job_id = assigned_row.job_id
     role_name = assigned_row.job_role
 
-    if canonical_row and canonical_row.id != assigned_row.id:
-        canonical_row.talent_id = None
-        canonical_row.assign_status = False
+    db.query(JobRoleAssignment).filter(
+        JobRoleAssignment.job_role_id == target_role.id,
+        JobRoleAssignment.talent_id == assigned_talent_id
+    ).delete(synchronize_session=False)
 
-    if assigned_row.id != getattr(canonical_row, "id", None):
-        db.delete(assigned_row)
-    else:
-        assigned_row.talent_id = None
-        assigned_row.assign_status = False
+    if target_role.talent_id == assigned_talent_id:
+        remaining_assignment = db.query(JobRoleAssignment).filter(
+            JobRoleAssignment.job_role_id == target_role.id
+        ).first()
+        if remaining_assignment:
+            target_role.talent_id = remaining_assignment.talent_id
+            target_role.assign_status = True
+        else:
+            target_role.talent_id = None
+            target_role.assign_status = False
 
-    assignment_records = db.query(JobRoleAssignment).join(JobRole).filter(
-        JobRoleAssignment.job_id == assigned_job_id,
-        JobRoleAssignment.talent_id == assigned_talent_id,
-        JobRole.job_role == role_name
-    ).all()
-    for record in assignment_records:
-        db.delete(record)
+    db.commit()
 
     db.commit()
 
