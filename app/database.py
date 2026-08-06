@@ -227,7 +227,7 @@ class JobRole(Base):
     job_id = Column(Integer, ForeignKey("jobs_talent_job.job_id"), nullable=False)
     talent_id = Column(BigInteger, ForeignKey("talents.talent_id"), nullable=True)
     job_role = Column(String(250), nullable=False)
-    assign_status = Column(Boolean, default=True) 
+    assign_status = Column(Boolean, default=False, nullable=False)
 
     job = relationship("Job", back_populates="roles")
     talent = relationship("Talent")
