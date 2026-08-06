@@ -2254,35 +2254,51 @@ async def assign_talent_role(
     request: AssignRoleRequest,
     db: Session = Depends(get_db)
 ):
-    """Assign an existing job role to a talent without creating a new role."""
+    """Assign an existing job role to a talent, creating records in both JobRole and JobRoleAssignment tables."""
     source_role = db.query(JobRole).filter(JobRole.id == request.id).first()
     if not source_role:
         raise HTTPException(status_code=404, detail="Role not found.")
 
-    # Verify that the talent exists before attempting to assign them to a role
     talent = db.query(Talent).filter(Talent.talent_id == request.talent_id).first()
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found.")
 
+    # Check for existing assignment in JobRoleAssignment table
     existing_assignment = db.query(JobRoleAssignment).filter(
         JobRoleAssignment.job_role_id == source_role.id,
         JobRoleAssignment.talent_id == request.talent_id
     ).first()
 
-    role_display_name = source_role.job_role
+    # Also check for existing assignment in the JobRole table for backward compatibility
+    existing_job_role_entry = db.query(JobRole).filter(
+        JobRole.job_id == source_role.job_id,
+        JobRole.job_role == source_role.job_role,
+        JobRole.talent_id == request.talent_id
+    ).first()
 
-    if existing_assignment:
+    if existing_assignment or existing_job_role_entry:
         return {
             "status_code": 200,
             "status_message": f"Talent is already assigned to the role '{source_role.job_role}'."
         }
 
+    # 1. Create the assignment in the JobRoleAssignment table
     new_assignment = JobRoleAssignment(
         job_id=source_role.job_id,
         job_role_id=source_role.id,
         talent_id=request.talent_id
     )
     db.add(new_assignment)
+
+    # 2. Create a corresponding entry in the JobRole table with the talent_id
+    new_job_role_entry = JobRole(
+        job_id=source_role.job_id,
+        job_role=source_role.job_role,
+        talent_id=request.talent_id,
+        assign_status=True
+    )
+    db.add(new_job_role_entry)
+
     db.commit()
 
     return {
