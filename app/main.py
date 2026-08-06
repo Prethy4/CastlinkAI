@@ -2242,9 +2242,10 @@ async def get_available_roles(
             return []
         raise HTTPException(status_code=400, detail="Must provide job_id or session_id")
 
-    # Fetch all JobRole objects for the job. We will filter unassigned ones in logic.
+    # Fetch only the canonical (unassigned) roles for the job.
+    # These are the roles created with the job, where talent_id is NULL.
     roles_query = db.query(JobRole).filter(
-        JobRole.job_id == job_identifier
+        JobRole.job_id == job_identifier, JobRole.talent_id == None
     ).order_by(JobRole.id.asc()).all()
     
     return roles_query
