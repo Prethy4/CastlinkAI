@@ -2247,9 +2247,7 @@ async def get_available_roles(
         JobRole.job_id == job_identifier
     ).order_by(JobRole.id.asc()).all()
     
-    # This endpoint should only return roles that are not yet assigned to anyone.
-    unassigned_roles = [role for role in roles_query if not db.query(JobRoleAssignment).filter(JobRoleAssignment.job_role_id == role.id).first()]
-    return unassigned_roles
+    return roles_query
 
 @app.post("/api/jobs/assign-role", dependencies=[Depends(limiter)])
 async def assign_talent_role(
