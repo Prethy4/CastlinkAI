@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
 from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole, JobRoleAssignment
-from app.config import BASE_URL
+from app.config import BASE_URL, BASE_URL_BACKEND
 from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
@@ -40,6 +40,55 @@ app.add_middleware(
 
 # Mount the media directory to serve static files (videos and images)
 app.mount("/media", StaticFiles(directory="media"), name="media")
+
+
+def _make_media_urls_absolute(item: dict) -> dict:
+    if not isinstance(item, dict):
+        return item
+
+    if 'images' in item and isinstance(item['images'], list):
+        item['images'] = [
+            f"{BASE_URL_BACKEND}{value}" if isinstance(value, str) and value.startswith('/') else value
+            for value in item['images']
+        ]
+
+    if 'tapes' in item and isinstance(item['tapes'], list):
+        item['tapes'] = [
+            f"{BASE_URL}{value}" if isinstance(value, str) and value.startswith('/') else value
+            for value in item['tapes']
+        ]
+
+    if 'polas' in item and isinstance(item['polas'], list):
+        item['polas'] = [
+            f"{BASE_URL}{value}" if isinstance(value, str) and value.startswith('/') else value
+            for value in item['polas']
+        ]
+
+    for key in ("profile_image", "profile_image_url", "image_url"):
+        if key in item and isinstance(item[key], str) and item[key].startswith('/'):
+            item[key] = f"{BASE_URL_BACKEND}{item[key]}"
+
+    return item
+
+
+def _get_assigned_roles_for_talent(db: Session, talent_id: int, user_id: int) -> list[dict]:
+    assigned_roles = []
+    assignments = db.query(JobRoleAssignment).join(JobRole).join(Job).filter(
+        JobRoleAssignment.talent_id == talent_id,
+        Job.job_created_by_id == user_id
+    ).all()
+
+    for assignment in assignments:
+        role = assignment.role
+        job = assignment.job
+        assigned_roles.append({
+            "job_id": job.job_id,
+            "job_title": job.title,
+            "role": role.job_role if role else None,
+            "status": bool(role.assign_status) if role is not None else True
+        })
+
+    return assigned_roles
 
 limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please contact the support.")
 
@@ -92,6 +141,7 @@ async def health_check():
 @app.post("/api/chat", dependencies=[Depends(limiter)])
 async def send_message(
     request: ChatRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user)
     ):
@@ -294,10 +344,19 @@ async def send_message(
                     total_results = msg.artifact.get('total_results', 0)
 
         if search_performed:
+            for talent in suggested_talents_list:
+                if isinstance(talent, dict):
+                    _make_media_urls_absolute(talent)
+                    talent_id = talent.get('talent_id') or talent.get('id')
+                    if talent_id:
+                        talent['assigned_roles'] = _get_assigned_roles_for_talent(db, talent_id, user_id)
+                    else:
+                        talent.setdefault('assigned_roles', [])
+
             current_filters['suggested_count'] = len(suggested_talents_list)
             current_filters['suggested_talents_list'] = suggested_talents_list
             current_filters['total_results'] = total_results
-            draft.phase = "generated" 
+            draft.phase = "generated"
 
             jobs_in_session = db.query(Job).filter(Job.session_id == chat_session.session_id).all()
             for job in jobs_in_session:
