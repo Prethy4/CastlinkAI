@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import json
 from datetime import date, datetime
 from decimal import Decimal
-from app.config import BASE_URL
+from app.config import BASE_URL, BASE_URL_BACKEND
 
 class OptionalDetails(BaseModel):
     location: Optional[str] = None
@@ -48,7 +48,7 @@ class TalentResponse(BaseModel):
     def make_urls_absolute(cls, data: Any) -> Any:
         if isinstance(data, dict):
             if 'images' in data and data['images']:
-                data['images'] = [f"{BASE_URL}{img}" if img and img.startswith('/') else img for img in data['images']]
+                data['images'] = [f"{BASE_URL_BACKEND}{img}" if img and img.startswith('/') else img for img in data['images']]
             if 'tapes' in data and data['tapes']:
                 data['tapes'] = [f"{BASE_URL}{tape}" if tape and tape.startswith('/') else tape for tape in data['tapes']]
             if 'polas' in data and data['polas']:
@@ -149,6 +149,17 @@ class PolaStatusAction(BaseModel):
     status: str  # 'accepted' or 'rejected'
     session_id: Optional[str] = None
 
+def _normalize_nested_urls(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _normalize_nested_urls(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_normalize_nested_urls(item) for item in value]
+    if isinstance(value, str) and value.startswith('/'):
+        if value.startswith('/media/'):
+            return f"{BASE_URL_BACKEND}{value}"
+        return f"{BASE_URL}{value}"
+    return value
+
 class PolaUploadPageResponse(BaseModel):
     talent_name: str
     talent_role: Optional[str] = None
@@ -191,6 +202,11 @@ class ChatMessageResponse(BaseModel):
     content: str
     timestamp: datetime
     saved_filters: Optional[Dict[str, Any]] = Field(None, alias="saved_filters", validation_alias="filters")
+
+    @field_validator('saved_filters', mode='before')
+    @classmethod
+    def normalize_saved_filters(cls, v):
+        return _normalize_nested_urls(v)
 
     class Config:
         from_attributes = True
@@ -355,7 +371,7 @@ class TalentPreview(BaseModel):
     @classmethod
     def make_photo_url_absolute(cls, v):
         if isinstance(v, str) and v.startswith('/'):
-            return f"{BASE_URL}{v}"
+            return f"{BASE_URL_BACKEND}{v}"
         return v
 
 class ShortlistSummaryItem(BaseModel):
