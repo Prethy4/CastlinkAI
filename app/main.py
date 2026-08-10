@@ -71,24 +71,98 @@ def _make_media_urls_absolute(item: dict) -> dict:
     return item
 
 
-def _get_assigned_roles_for_talent(db: Session, talent_id: int, user_id: int) -> list[dict]:
-    assigned_roles = []
-    assignments = db.query(JobRoleAssignment).join(JobRole).join(Job).filter(
-        JobRoleAssignment.talent_id == talent_id,
-        Job.job_created_by_id == user_id
-    ).all()
+def _get_assigned_roles_for_talent(db: Session, talent_id: int, user_id: int, job_id: Optional[int] = None) -> list[dict]:
+    if job_id is None:
+        return []
 
-    for assignment in assignments:
-        role = assignment.role
-        job = assignment.job
-        assigned_roles.append({
-            "job_id": job.job_id,
-            "job_title": job.title,
-            "role": role.job_role if role else None,
-            "status": bool(role.assign_status) if role is not None else True
-        })
+    job = db.query(Job).filter(Job.job_id == job_id, Job.job_created_by_id == user_id).first()
+    if not job:
+        return []
+
+    assigned_roles = []
+    seen_roles = set()
+
+    direct_roles = db.query(JobRole.job_role, JobRole.assign_status).filter(
+        JobRole.job_id == job_id,
+        JobRole.talent_id == talent_id,
+        JobRole.assign_status == True
+    ).all()
+    for role_name, assign_status in direct_roles:
+        if role_name and role_name not in seen_roles:
+            assigned_roles.append({
+                "job_id": job.job_id,
+                "job_title": job.title,
+                "role": role_name,
+                "status": bool(assign_status)
+            })
+            seen_roles.add(role_name)
+
+    assignment_roles = db.query(JobRole.job_role, JobRole.assign_status).join(
+        JobRoleAssignment, JobRoleAssignment.job_role_id == JobRole.id
+    ).filter(
+        JobRoleAssignment.job_id == job_id,
+        JobRoleAssignment.talent_id == talent_id
+    ).all()
+    for role_name, assign_status in assignment_roles:
+        if role_name and role_name not in seen_roles:
+            assigned_roles.append({
+                "job_id": job.job_id,
+                "job_title": job.title,
+                "role": role_name,
+                "status": bool(assign_status)
+            })
+            seen_roles.add(role_name)
 
     return assigned_roles
+
+
+def _refresh_session_saved_filters_assigned_roles(db: Session, session_obj):
+    job_id = session_obj.job_id
+    if job_id is None:
+        return
+
+    def refresh_for_filter_block(filters):
+        if not isinstance(filters, dict):
+            return
+
+        suggested_talents = filters.get('suggested_talents_list')
+        if not isinstance(suggested_talents, list):
+            return
+
+        for talent in suggested_talents:
+            if isinstance(talent, dict):
+                talent_id = talent.get('talent_id') or talent.get('id')
+                if talent_id:
+                    talent['assigned_roles'] = _get_assigned_roles_for_talent(db, talent_id, session_obj.user_id, job_id)
+
+    for msg in getattr(session_obj, 'messages', []) or []:
+        refresh_for_filter_block(msg.filters)
+
+    if getattr(session_obj, 'draft', None):
+        refresh_for_filter_block(session_obj.draft.saved_filters)
+
+
+def _format_shoot_date_for_display(date_data: Optional[str]) -> str:
+    """
+    Parses a shoot date string from various formats (JSON list, comma-separated, single)
+    and returns a clean, human-readable string for notifications.
+    """
+    if not date_data:
+        return ""
+
+    dates = []
+    try:
+        # Attempt to parse as JSON: '["2026-08-20"]'
+        parsed = json.loads(date_data)
+        if isinstance(parsed, list):
+            dates = [str(d).strip() for d in parsed if d]
+        elif parsed:
+            dates = [str(parsed).strip()]
+    except (json.JSONDecodeError, TypeError):
+        # Fallback for comma-separated or single string: "2026-08-20, 2026-08-21"
+        dates = [d.strip() for d in date_data.split(',') if d.strip()]
+
+    return f" for the shoot on {', '.join(dates)}" if dates else ""
 
 limiter = RateLimiter(limit=20, window=60, error_msg="Something went wrong. Please contact the support.")
 
@@ -211,7 +285,10 @@ async def send_message(
             else:
                 msgs.append(AIMessage(content=m.content))
 
-        existing_job = db.query(Job).filter(Job.session_id == chat_session.session_id).order_by(Job.created_at.desc()).first()
+        existing_job = db.query(Job).filter(
+            Job.session_id == chat_session.session_id
+        ).order_by(Job.created_at.desc()).first()
+        current_job_id = chat_session.job_id if chat_session.job_id else (existing_job.job_id if existing_job else None)
 
         if not filters.get("title"):
             filters["title"] = (existing_job.title if existing_job else None) or (draft.title if draft else None) or filters.get("title")
@@ -344,14 +421,22 @@ async def send_message(
                     total_results = msg.artifact.get('total_results', 0)
 
         if search_performed:
+            normalized_talents = []
             for talent in suggested_talents_list:
-                if isinstance(talent, dict):
-                    _make_media_urls_absolute(talent)
-                    talent_id = talent.get('talent_id') or talent.get('id')
-                    if talent_id:
-                        talent['assigned_roles'] = _get_assigned_roles_for_talent(db, talent_id, user_id)
-                    else:
-                        talent.setdefault('assigned_roles', [])
+                _make_media_urls_absolute(talent)
+
+                if not isinstance(talent, dict):
+                    talent = jsonable_encoder(talent)
+
+                talent_id = talent.get('talent_id') or talent.get('id')
+                talent['assigned_roles'] = []
+
+                if talent_id:
+                    talent['assigned_roles'] = _get_assigned_roles_for_talent(db, talent_id, user_id, current_job_id)
+
+                normalized_talents.append(talent)
+
+            suggested_talents_list = normalized_talents
 
             current_filters['suggested_count'] = len(suggested_talents_list)
             current_filters['suggested_talents_list'] = suggested_talents_list
@@ -391,6 +476,7 @@ async def send_message(
         db.commit()
 
         db.refresh(chat_session)
+        _refresh_session_saved_filters_assigned_roles(db, chat_session)
 
         response = WrappedChatResponse(
             status_code=200,
@@ -702,6 +788,10 @@ async def get_sessions(
 
     if not sessions:
         raise HTTPException(status_code=404, detail="User not found")
+
+    for session in sessions:
+        _refresh_session_saved_filters_assigned_roles(db, session)
+
     return {
         "status_code": 200,
         "status_message": "Success",
@@ -727,6 +817,7 @@ async def get_session_details(
         raise HTTPException(status_code=404, detail="Chat not found")
 
     db.refresh(session)
+    _refresh_session_saved_filters_assigned_roles(db, session)
     response = WrappedChatResponse(
         status_code=200,
         status_message="Success",
@@ -840,6 +931,7 @@ async def get_draft(
         raise HTTPException(status_code=404, detail="Associated session not found")
 
     db.refresh(session)
+    _refresh_session_saved_filters_assigned_roles(db, session)
     response = WrappedChatResponse(
         status_code=200,
         status_message="Success",
@@ -866,6 +958,7 @@ async def continue_draft(
         raise HTTPException(status_code=404, detail="Associated session not found")
     
     db.refresh(session)
+    _refresh_session_saved_filters_assigned_roles(db, session)
     response = WrappedChatResponse(
         status_code=200,
         status_message="Success",
@@ -1070,21 +1163,25 @@ async def view_ai_result(
                 else: t['polas'] = t.get('polas', [])
             
             t['assigned_roles'] = talent_roles_map.get(talent_id, [])
-
             # For e-castings, snapshots are returned as-is
             processed.append(TalentResponse(**t))
         return processed
 
     # Universal standard format: merge all into one talents list
     all_talents_map = {}
+
     for t in (suggested_talents or []):
-        resp = TalentResponse(**t)
-        resp.assigned_roles = talent_roles_map.get(resp.talent_id, [])
-        all_talents_map[resp.talent_id] = resp
-        
+        if t.get('talent_id') not in all_talents_map:
+            resp = TalentResponse(**t)
+            resp.assigned_roles = talent_roles_map.get(resp.talent_id, [])
+            all_talents_map[resp.talent_id] = resp
+
     for t in prepare_talent_list(requested_selftapes_raw, 'selftape'):
         all_talents_map[t.talent_id] = t
-    # Note: e-castings and polas are already handled by prepare_talent_list helper above
+    for t in prepare_talent_list(requested_ecastings_raw, 'ecasting'):
+        all_talents_map[t.talent_id] = t
+    for t in prepare_talent_list(requested_polas_raw, 'polas'):
+        all_talents_map[t.talent_id] = t
 
     final_talents = list(all_talents_map.values())
     total_results = len(final_talents)
@@ -1521,11 +1618,17 @@ async def shortlist_talent(
     if not talent:
         raise HTTPException(status_code=404, detail="Talent not found")
 
+    shoot_date_str = ""
     job = None
     if request.job_id:
         job = db.query(Job).filter(Job.job_id == request.job_id, Job.job_created_by_id == user_id).first()
+        if job:
+            shoot_date_from_db = db.query(JobAIResult.shoot_date).filter(JobAIResult.job_id == job.job_id).scalar()
+            shoot_date_str = _format_shoot_date_for_display(shoot_date_from_db)
     elif request.session_id:
         job = db.query(Job).filter(Job.session_id == request.session_id, Job.job_created_by_id == user_id).order_by(Job.created_at.desc()).first()
+        shoot_date_from_db = db.query(Draft.shoot_date).filter(Draft.session_id == request.session_id).scalar()
+        shoot_date_str = _format_shoot_date_for_display(shoot_date_from_db)
 
     shortlist_query = db.query(ShortlistedTalent).filter(
         ShortlistedTalent.user_id == user_id,
@@ -1560,18 +1663,18 @@ async def shortlist_talent(
         job_title = db.query(Draft.title).filter(Draft.session_id == request.session_id).scalar()
     job_display_name = job_title or "a new project"
 
+    notification_event = f"{talent.name} has been shortlisted for the project '{job_display_name}'{shoot_date_str}."
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"{talent.name} has been shortlisted for the project '{job_display_name}'."
+        event=notification_event
     ))
 
     # Send Email Notification to Agent
     if talent.agent and talent.agent.email:
         subject = f"Congratulations! {talent.name} has been shortlisted for {job_display_name}"
         body = (
-            f"Dear {talent.agent.full_name},\n\n"
-            f"Congratulations! Your talent, {talent.name}, has been shortlisted for the following project: '{job_display_name}'.\n\n"
+            f"Dear {talent.agent.full_name},\n\n"f"Congratulations! Your talent, {talent.name}, has been shortlisted for the project '{job_display_name}'{shoot_date_str}.\n\n"
             f"Please log in to your Pool of Cast portal to review the job specifics and prepare for any potential next steps.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
@@ -1781,10 +1884,11 @@ async def book_talent(
     job_display_name = job_title or "a new project"
     booking_dates_str = ", ".join([d.strftime('%B %d, %Y') for d in sorted(request.booking_dates)])
 
+    notification_event = f"Booking Confirmation: {talent.name} has been booked for '{job_display_name}' for the shoot on {booking_dates_str}{role_text}."
     db.add(Notification(
         receiver_id=talent.agent_id,
         sender_id=user_id,
-        event=f"Booking confirmation: {talent.name} has been officially booked for '{job_display_name}' on {booking_dates_str}{role_text}."
+        event=notification_event
     ))
 
     # Send Email Notification to Agent
@@ -1794,9 +1898,9 @@ async def book_talent(
             subject += f" ({', '.join(role_names)})"
             
         body = (
-            f"Dear {talent.agent.full_name},\n\n"
-            f"Congratulations! Your talent, {talent.name}, has been officially booked for the following role(s): {', '.join(role_names) if role_names else 'unspecified'} "
-            f"for the project: '{job_display_name}' on {booking_dates_str}.\n\n"
+            f"Dear {talent.agent.full_name},\n\n"f"This email serves as confirmation that your talent, {talent.name}, has been booked for the project '{job_display_name}'.\n\n"
+            f"Role(s): {', '.join(role_names) if role_names else 'Not specified'}\n"
+            f"Shoot Date(s): {booking_dates_str}\n\n"
             f"We look forward to a successful collaboration.\n\n"
             f"Best regards,\n"
             f"The Pool of Cast Team"
