@@ -188,6 +188,16 @@ def generate_casting(location: str = None, continent: str = None, country: str =
         for t in talents:
             score = 0
             
+            # --- Strict Location/Country Filtering ---
+            # If a location or country is specified, talent MUST match it to be considered.
+            if location or country:
+                location_match = False
+                if location and str(location).lower() in str(t.location).lower(): location_match = True
+                if country and str(country).lower() in str(t.country).lower(): location_match = True
+                if location and not location_match and str(location).lower() in str(t.country).lower(): location_match = True
+                if not location_match:
+                    continue # Skip talent if they don't match the specified location/country.
+
             def matches(val, target):
                 return str(val).lower() in str(target).lower() if val and target else False
 
@@ -227,11 +237,11 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 except (ValueError, TypeError):
                     pass
 
-            if location:
-                if matches(location, t.location) or matches(location, t.country) or matches(location, t.continent):
-                    score += 80
-            if continent and matches(continent, t.continent): score += 50
-            if country and matches(country, t.country): score += 50
+            # Scoring for location is still useful for ranking if multiple criteria are met
+            if location and matches(location, t.location): score += 4000
+            if country and matches(country, t.country): score += 5000
+            if continent and matches(continent, t.continent): score += 4000
+
             
             if role and matches(role, t.role): score += 2000
 
