@@ -2482,7 +2482,7 @@ async def assign_talent_role(
     }
 
 
-@app.api_route("/api/jobs/unassign-role", methods=["GET", "DELETE"], dependencies=[Depends(limiter)])
+@app.api_route("/api/jobs/unassign-role", methods=["PATCH", "DELETE"], dependencies=[Depends(limiter)])
 async def unassign_talent_role(
     job_role_id: Optional[int] = Query(None),
     job_id: Optional[int] = Query(None),
