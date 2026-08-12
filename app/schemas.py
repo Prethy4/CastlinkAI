@@ -101,6 +101,9 @@ class UpdateJobRequest(BaseModel):
     budget: Optional[str] = Field(None, alias="budget_range")
     currency: Optional[str] = None
     casting_roles: Optional[Union[str, List[str]]] = None
+    add_roles: Optional[Union[str, List[str]]] = None
+    remove_roles: Optional[Union[str, List[str]]] = None
+
 
 
 class SessionRequest(BaseModel):
