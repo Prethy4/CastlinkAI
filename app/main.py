@@ -1058,12 +1058,12 @@ async def edit_job(
         job.location = update_data['location']
         changes.append(f"location to '{job.location}'")
 
-    if 'budget_range' in update_data:
-        budget_min, budget_max, currency = parse_budget(update_data['budget_range'])
+    if 'budget' in update_data:
+        budget_min, budget_max, currency = parse_budget(update_data['budget'])
         if budget_min != job.budget_min or budget_max != job.budget_max:
             job.budget_min = budget_min
             job.budget_max = budget_max
-            changes.append(f"budget to '{update_data['budget_range']}'")
+            changes.append(f"budget to '{update_data['budget']}'")
         if 'currency' not in update_data and currency != job.currency:
             job.currency = currency
             changes.append(f"currency to '{job.currency}'")
@@ -1073,15 +1073,15 @@ async def edit_job(
         changes.append(f"currency to '{job.currency}'")
 
     ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job_id).first()
-    if 'shoot_dates' in update_data:
+    if 'shoot_date' in update_data:
         if not ai_result:
             ai_result = JobAIResult(job_id=job_id)
             db.add(ai_result)
         
-        new_dates = json.dumps(update_data['shoot_dates'])
+        new_dates = json.dumps(update_data['shoot_date'])
         if new_dates != ai_result.shoot_date:
             ai_result.shoot_date = new_dates
-            changes.append(f"shoot date to {', '.join(update_data['shoot_dates'])}")
+            changes.append(f"shoot date to {', '.join(update_data['shoot_date'])}")
 
     if not changes:
         return {"status_code": 200, "status_message": "No changes detected."}
