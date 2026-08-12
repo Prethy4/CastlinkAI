@@ -93,6 +93,16 @@ class GenerateJobRequest(BaseModel):
     class Config:
         populate_by_name = True
 
+class UpdateJobRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    shoot_date: Optional[List[str]] = Field(None, alias="shoot_dates")
+    budget: Optional[str] = Field(None, alias="budget_range")
+    currency: Optional[str] = None
+    casting_roles: Optional[Union[str, List[str]]] = None
+
+
 class SessionRequest(BaseModel):
     session_id: str
     
