@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 from langchain_core.messages import HumanMessage, AIMessage
 from app.database import init_db, get_db, ChatSession, ChatMessage, Draft, Job, JobAIResult, UserAuth, Talent, ShortlistedTalent, Booking, SelfTapeRequest, SelfTapeLink, PolaRequest, PolaLink, TalentAvailableDate, Notification, JobRole, JobRoleAssignment
-from app.config import BASE_URL, BASE_URL_BACKEND
-from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest
+from app.config import BASE_URL, BASE_URL_BACKEND, SENDER_EMAIL
+from app.schemas import TalentResponse, ChatSessionResponse, DraftResponse, ChatRequest, JobResponse, ContinueDraftResponse, ChatMessageResponse, JobResultResponse, WrappedChatResponse, PaginationResponse, TalentDataResponse, UserDraftResponse, DraftsSavedFilters, RequestTalentJobRequest, ShortlistTalentRequest, BookTalentRequest, ShortlistSummaryResponse, ShortlistSummaryItem, TalentPreview, SummaryPagination, SelfTapeStatusAction, SelfTapeUploadRequest, SelfTapeUploadPageResponse, PolaStatusAction, PolaUploadPageResponse, GenerateJobRequest, JobRoleResponse, AssignRoleRequest, UpdateJobRequest
 from app.services import app_graph, extract_information, generate_ask_response, CustomEncoder, RateLimiter, time_ago, parse_budget, generate_job_details_from_messages
 from app.email_auth import send_email
 from typing import List, Optional, Union
@@ -1018,6 +1018,134 @@ async def get_user_jobs(
         "status_code": 200,
         "status_message": "Success",
         "data": [jsonable_encoder(JobResponse.from_orm(j)) for j in query.all()]
+    }
+
+@app.patch("/api/jobs/edit-job/{job_id}", dependencies=[Depends(limiter)])
+async def edit_job(
+    job_id: int,
+    request: UpdateJobRequest,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Edit an active job and notify shortlisted/booked talent."""
+    job = db.query(Job).filter(
+        Job.job_id == job_id,
+        Job.job_created_by_id == user_id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or unauthorized")
+
+    if job.status != "active":
+        raise HTTPException(status_code=400, detail="Only active jobs can be edited.")
+
+    update_data = request.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    changes = []
+
+    if 'title' in update_data and update_data['title'] != job.title:
+        job.title = update_data['title']
+        changes.append(f"title to '{job.title}'")
+
+    if 'description' in update_data and update_data['description'] != job.description:
+        job.description = update_data['description']
+        changes.append("description")
+
+    if 'location' in update_data and update_data['location'] != job.location:
+        job.location = update_data['location']
+        changes.append(f"location to '{job.location}'")
+
+    if 'budget_range' in update_data:
+        budget_min, budget_max, currency = parse_budget(update_data['budget_range'])
+        if budget_min != job.budget_min or budget_max != job.budget_max:
+            job.budget_min = budget_min
+            job.budget_max = budget_max
+            changes.append(f"budget to '{update_data['budget_range']}'")
+        if 'currency' not in update_data and currency != job.currency:
+            job.currency = currency
+            changes.append(f"currency to '{job.currency}'")
+
+    if 'currency' in update_data and update_data['currency'] != job.currency:
+        job.currency = update_data['currency']
+        changes.append(f"currency to '{job.currency}'")
+
+    ai_result = db.query(JobAIResult).filter(JobAIResult.job_id == job_id).first()
+    if 'shoot_dates' in update_data:
+        if not ai_result:
+            ai_result = JobAIResult(job_id=job_id)
+            db.add(ai_result)
+        
+        new_dates = json.dumps(update_data['shoot_dates'])
+        if new_dates != ai_result.shoot_date:
+            ai_result.shoot_date = new_dates
+            changes.append(f"shoot date to {', '.join(update_data['shoot_dates'])}")
+
+    if not changes:
+        return {"status_code": 200, "status_message": "No changes detected."}
+
+    # --- Notification Logic ---
+    # Get unique agent IDs from shortlisted and booked talents
+    shortlisted_agents = db.query(Talent.agent_id).join(
+        ShortlistedTalent, ShortlistedTalent.talent_id == Talent.talent_id
+    ).filter(ShortlistedTalent.job_id == job_id).all()
+
+    booked_agents = db.query(Talent.agent_id).join(
+        Booking, Booking.talent_id == Talent.talent_id
+    ).filter(Booking.job_id == job_id).all()
+
+    agent_ids = {agent_id for (agent_id,) in shortlisted_agents + booked_agents}
+
+    if agent_ids:
+        change_str = ", ".join(changes)
+        notification_event = f"The details for the job '{job.title}' have been updated. Changes were made to the {change_str}."
+        
+        # Create notifications for each agent
+        for agent_id in agent_ids:
+            db.add(Notification(
+                receiver_id=agent_id,
+                sender_id=user_id,
+                event=notification_event
+            ))
+
+        # Send emails
+        agents_to_email = db.query(UserAuth).filter(UserAuth.user_id.in_(agent_ids), UserAuth.email != None).all()
+        for agent in agents_to_email:
+            subject = f"Update for Job: {job.title}"
+            body = (
+                f"Dear {agent.full_name},\n\n"
+                f"Please note that the details for the job '{job.title}' have been updated.\n\n"
+                f"The following fields were changed: {change_str}.\n\n"
+                f"Please log in to your portal to review the updated job details.\n\n"
+                f"Best regards,\n"
+                f"The CastLink AI Team"
+            )
+            if agent.email and SENDER_EMAIL:
+                 background_tasks.add_task(send_email, agent.email, subject, body)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error during job update: {str(e)}")
+
+    db.refresh(job)
+    if ai_result:
+        db.refresh(ai_result)
+
+    job_response = JobResponse.from_orm(job).model_dump()
+    if ai_result and ai_result.shoot_date:
+        try:
+            job_response['shoot_date'] = json.loads(ai_result.shoot_date)
+        except json.JSONDecodeError:
+            job_response['shoot_date'] = ai_result.shoot_date
+
+    return {
+        "status_code": 200,
+        "status_message": "Job updated successfully. Relevant talent have been notified.",
+        "data": job_response
     }
 
 @app.delete("/api/jobs/delete-job-id/", dependencies=[Depends(limiter)])
