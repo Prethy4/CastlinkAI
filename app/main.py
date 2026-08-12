@@ -1083,11 +1083,75 @@ async def edit_job(
             ai_result.shoot_date = new_dates
             changes.append(f"shoot date to {', '.join(update_data['shoot_date'])}")
 
+    has_role_updates = any(k in update_data for k in ('casting_roles', 'add_roles', 'remove_roles'))
+    if has_role_updates:
+        def _parse_roles_input(roles_source) -> set:
+            roles_set = set()
+            if isinstance(roles_source, list):
+                for r in roles_source:
+                    if isinstance(r, str) and r.strip():
+                        roles_set.add(r.strip())
+            elif isinstance(roles_source, str):
+                try:
+                    parsed_roles = json.loads(roles_source)
+                    if isinstance(parsed_roles, list):
+                        for r in parsed_roles:
+                            if isinstance(r, str) and r.strip():
+                                roles_set.add(r.strip())
+                    elif isinstance(parsed_roles, str) and parsed_roles.strip():
+                        roles_set.add(parsed_roles.strip())
+                except (json.JSONDecodeError, TypeError):
+                    for r in roles_source.split(','):
+                        if r.strip():
+                            roles_set.add(r.strip())
+            return roles_set
+
+        existing_roles_records = db.query(JobRole).filter(JobRole.job_id == job_id).all()
+        existing_roles_set = {r.job_role for r in existing_roles_records}
+
+        roles_to_add = set()
+        roles_to_remove = set()
+
+        if 'add_roles' in update_data or 'remove_roles' in update_data:
+            if 'add_roles' in update_data and update_data['add_roles']:
+                add_set = _parse_roles_input(update_data['add_roles'])
+                roles_to_add.update(add_set - existing_roles_set)
+            if 'remove_roles' in update_data and update_data['remove_roles']:
+                remove_set = _parse_roles_input(update_data['remove_roles'])
+                roles_to_remove.update(remove_set & existing_roles_set)
+        elif 'casting_roles' in update_data:
+            target_roles_set = _parse_roles_input(update_data['casting_roles'])
+            roles_to_add = target_roles_set - existing_roles_set
+            roles_to_remove = existing_roles_set - target_roles_set
+
+        if roles_to_add or roles_to_remove:
+            changes.append("casting roles")
+
+            if roles_to_remove:
+                roles_to_delete_query = db.query(JobRole).filter(
+                    JobRole.job_id == job_id,
+                    JobRole.job_role.in_(roles_to_remove)
+                )
+                role_ids_to_delete = [r.id for r in roles_to_delete_query.all()]
+
+                if role_ids_to_delete:
+                    db.query(JobRoleAssignment).filter(
+                        JobRoleAssignment.job_role_id.in_(role_ids_to_delete)
+                    ).delete(synchronize_session=False)
+
+                    roles_to_delete_query.delete(synchronize_session=False)
+
+            for role_name in roles_to_add:
+                db.add(JobRole(job_id=job_id, job_role=role_name))
+
+            final_roles_set = (existing_roles_set - roles_to_remove) | roles_to_add
+            job.casting_roles = json.dumps(sorted(list(final_roles_set)), cls=CustomEncoder)
+
+        
     if not changes:
         return {"status_code": 200, "status_message": "No changes detected."}
 
     # --- Notification Logic ---
-    # Get unique agent IDs from shortlisted and booked talents
     shortlisted_agents = db.query(Talent.agent_id).join(
         ShortlistedTalent, ShortlistedTalent.talent_id == Talent.talent_id
     ).filter(ShortlistedTalent.job_id == job_id).all()
