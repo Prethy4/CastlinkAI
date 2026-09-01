@@ -34,6 +34,7 @@ class Talent(Base):
     location = Column(String(255), nullable=False)
     continent = Column(String(100), nullable=False)
     country = Column(String(100), nullable=False)
+    portfolio_link = Column(String(200), nullable=True)
     is_active = Column(Boolean, nullable=False)
     approval_status = Column(String(20), nullable=False)
     is_available = Column(Boolean, nullable=False)
