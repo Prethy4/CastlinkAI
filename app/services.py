@@ -296,6 +296,7 @@ def generate_casting(location: str = None, continent: str = None, country: str =
                 "location": t.location,
                 "continent": t.continent,
                 "country": t.country,
+                "portfolio_link": t.portfolio_link if t.portfolio_link else None,
                 "is_active": t.is_active,
                 "approval_status": t.approval_status,
                 "is_available": t.is_available,
