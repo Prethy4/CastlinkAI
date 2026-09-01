@@ -37,6 +37,7 @@ class TalentResponse(BaseModel):
     location: Optional[str] = None
     continent: Optional[str] = None
     country: Optional[str] = None
+    portfolio_link: Optional[str] = None
     available_dates: List[date] = []
     status: Optional[str] = None
     tapes: List[str] = []
