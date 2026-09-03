@@ -116,30 +116,95 @@ def _get_assigned_roles_for_talent(db: Session, talent_id: int, user_id: int, jo
     return assigned_roles
 
 
-def _refresh_session_saved_filters_assigned_roles(db: Session, session_obj):
-    job_id = session_obj.job_id
-    if job_id is None:
+def _hydrate_talent_dict(talent_dict: dict, t: Talent):
+    if not isinstance(talent_dict, dict) or not t:
         return
+    talent_dict["name"] = t.name
+    talent_dict["role"] = t.role
+    if t.date_of_birth:
+        talent_dict["date_of_birth"] = t.date_of_birth.isoformat() if hasattr(t.date_of_birth, 'isoformat') else str(t.date_of_birth)
+    talent_dict["gender"] = t.gender
+    talent_dict["height"] = t.height
+    talent_dict["bust"] = t.bust
+    talent_dict["waist"] = t.waist
+    talent_dict["hips"] = t.hips
+    talent_dict["shoe_size"] = t.shoe_size
+    talent_dict["dress_size"] = t.dress_size
+    talent_dict["eye_color"] = t.eye_colour
+    talent_dict["hair_type"] = t.hair_type
+    talent_dict["hair_color"] = t.hair_colour
+    talent_dict["skin_color"] = t.skin_color
+    talent_dict["skills"] = t.skills if t.skills is not None else ""
+    talent_dict["location"] = t.location
+    talent_dict["continent"] = t.continent
+    talent_dict["country"] = t.country
+    talent_dict["portfolio_link"] = t.portfolio_link if t.portfolio_link else None
+    talent_dict["is_active"] = t.is_active
+    talent_dict["approval_status"] = t.approval_status
+    talent_dict["is_available"] = t.is_available
+    talent_dict["is_available_on_request"] = t.is_available_on_request
+    if t.available_dates is not None:
+        talent_dict["available_dates"] = [
+            ad.available_date.isoformat() if hasattr(ad.available_date, 'isoformat') else str(ad.available_date)
+            for ad in t.available_dates if getattr(ad, 'is_active', True)
+        ]
+    if t.images is not None:
+        talent_dict["images"] = [
+            f"{BASE_URL_BACKEND}/media/{img.image}" if not str(img.image).startswith("http") else img.image
+            for img in sorted(t.images, key=lambda x: x.image_id)
+        ]
+    if t.agent:
+        talent_dict["agent_name"] = t.agent.full_name
+        talent_dict["agent_id"] = t.agent_id
 
-    def refresh_for_filter_block(filters):
-        if not isinstance(filters, dict):
-            return
 
-        suggested_talents = filters.get('suggested_talents_list')
-        if not isinstance(suggested_talents, list):
-            return
+def _refresh_session_saved_filters_assigned_roles(db: Session, session_obj):
+    job_id = getattr(session_obj, 'job_id', None)
+    user_id = getattr(session_obj, 'user_id', None)
 
-        for talent in suggested_talents:
-            if isinstance(talent, dict):
-                talent_id = talent.get('talent_id') or talent.get('id')
-                if talent_id:
-                    talent['assigned_roles'] = _get_assigned_roles_for_talent(db, talent_id, session_obj.user_id, job_id)
+    talent_ids = set()
+    filter_blocks = []
 
     for msg in getattr(session_obj, 'messages', []) or []:
-        refresh_for_filter_block(msg.filters)
+        if isinstance(msg.filters, dict):
+            filter_blocks.append(msg.filters)
+            for t in msg.filters.get('suggested_talents_list', []) or []:
+                if isinstance(t, dict):
+                    tid = t.get('talent_id') or t.get('id')
+                    if tid:
+                        talent_ids.add(tid)
 
-    if getattr(session_obj, 'draft', None):
-        refresh_for_filter_block(session_obj.draft.saved_filters)
+    if getattr(session_obj, 'draft', None) and isinstance(session_obj.draft.saved_filters, dict):
+        filter_blocks.append(session_obj.draft.saved_filters)
+        for t in session_obj.draft.saved_filters.get('suggested_talents_list', []) or []:
+            if isinstance(t, dict):
+                tid = t.get('talent_id') or t.get('id')
+                if tid:
+                    talent_ids.add(tid)
+
+    if not talent_ids:
+        return
+
+    # Batch load all talents with relations in one query
+    talents = db.query(Talent).options(
+        joinedload(Talent.agent),
+        joinedload(Talent.images),
+        joinedload(Talent.available_dates)
+    ).filter(Talent.talent_id.in_(list(talent_ids))).all()
+    talent_map = {t.talent_id: t for t in talents}
+
+    for filters in filter_blocks:
+        suggested_talents = filters.get('suggested_talents_list')
+        if isinstance(suggested_talents, list):
+            for talent in suggested_talents:
+                if isinstance(talent, dict):
+                    tid = talent.get('talent_id') or talent.get('id')
+                    if tid and tid in talent_map:
+                        _hydrate_talent_dict(talent, talent_map[tid])
+                    if tid and job_id is not None and user_id is not None:
+                        talent['assigned_roles'] = _get_assigned_roles_for_talent(db, tid, user_id, job_id)
+                    elif 'assigned_roles' not in talent:
+                        talent['assigned_roles'] = []
 
 
 def _format_shoot_date_for_display(date_data: Optional[str]) -> str:
@@ -1316,6 +1381,30 @@ async def view_ai_result(
     pola_data = db.query(PolaRequest).options(joinedload(PolaRequest.images)).filter(PolaRequest.job_id == job_id).all()
     pola_status_map = {r.talent_id: r.status for r in pola_data}
     pola_links_map = {r.talent_id: [img.pola_url for img in r.images] for r in pola_data}
+
+    # Hydrate talent profile data from database
+    job_talent_ids = set()
+    for raw_coll in [suggested_talents, requested_selftapes_raw, requested_ecastings_raw, requested_polas_raw]:
+        for item in (raw_coll or []):
+            if isinstance(item, dict):
+                tid = item.get('talent_id') or item.get('id')
+                if tid:
+                    job_talent_ids.add(tid)
+
+    if job_talent_ids:
+        job_talents = db.query(Talent).options(
+            joinedload(Talent.agent),
+            joinedload(Talent.images),
+            joinedload(Talent.available_dates)
+        ).filter(Talent.talent_id.in_(list(job_talent_ids))).all()
+        job_talent_map = {t.talent_id: t for t in job_talents}
+
+        for raw_coll in [suggested_talents, requested_selftapes_raw, requested_ecastings_raw, requested_polas_raw]:
+            for item in (raw_coll or []):
+                if isinstance(item, dict):
+                    tid = item.get('talent_id') or item.get('id')
+                    if tid and tid in job_talent_map:
+                        _hydrate_talent_dict(item, job_talent_map[tid])
 
     # Fetch all assigned roles for this job to populate the talent objects.
     role_assignments = db.query(JobRoleAssignment).join(JobRole).filter(
